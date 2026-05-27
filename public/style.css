@@ -158,6 +158,9 @@ canvas { image-rendering: pixelated; display: block; }
 }
 .player-chip .swatch { width: 16px; height: 16px; border: 2px solid #000; }
 .hint { color: #8a7aa6; font-size: 10px; }
+.lang-row { display: flex; align-items: center; gap: 10px; }
+.lang-btn { padding: 8px 14px !important; font-size: 12px !important; }
+.active-lang { background: #ff8a3c !important; box-shadow: 3px 3px 0 #8a4a00, 0 0 0 3px #2a1a00 inset !important; }
 
 /* GAME */
 #game { background: #000; }

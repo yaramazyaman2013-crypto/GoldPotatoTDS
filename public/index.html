@@ -2,16 +2,16 @@
 <html lang="tr">
 <head>
 <meta charset="UTF-8" />
-<title>GoldPotato TDS</title>
+<title>Gold Wave</title>
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 <!-- MAIN MENU -->
 <div id="menu" class="screen">
   <div class="menu-left">
-    <h1 class="title">GOLD<span>POTATO</span><br/>TDS</h1>
-    <button id="btnPlay" class="pixel-btn">PLAY</button>
-    <button id="btnSettings" class="pixel-btn">AYARLAR</button>
+    <h1 class="title">GOLD<span>WAVE</span></h1>
+    <button id="btnPlay" class="pixel-btn" data-i18n="play">PLAY</button>
+    <button id="btnSettings" class="pixel-btn" data-i18n="settings">AYARLAR</button>
   </div>
   <div class="menu-top-right">
     <input id="nameInput" maxlength="16" />
@@ -28,14 +28,14 @@
 <!-- ROOMS SCREEN -->
 <div id="rooms" class="screen hidden">
   <div class="panel">
-    <h2 class="title-sm">ODALAR</h2>
-    <button id="btnBack1" class="pixel-btn small">GERI</button>
-    <button id="btnCreateRoom" class="pixel-btn">ODA OLUSTUR</button>
+    <h2 class="title-sm" data-i18n="rooms">ODALAR</h2>
+    <button id="btnBack1" class="pixel-btn small" data-i18n="back">GERI</button>
+    <button id="btnCreateRoom" class="pixel-btn" data-i18n="createRoom">ODA OLUSTUR</button>
     <div class="join-row">
-      <input id="joinCode" placeholder="ODA KODU" maxlength="5"/>
-      <button id="btnJoinCode" class="pixel-btn">KATIL</button>
+      <input id="joinCode" data-i18n-ph="roomCode" placeholder="ODA KODU" maxlength="5"/>
+      <button id="btnJoinCode" class="pixel-btn" data-i18n="join">KATIL</button>
     </div>
-    <h3 class="title-sm">AÇIK ODALAR</h3>
+    <h3 class="title-sm" data-i18n="openRooms">AÇIK ODALAR</h3>
     <div id="roomList" class="room-list"></div>
   </div>
 </div>
@@ -43,22 +43,27 @@
 <!-- LOBBY -->
 <div id="lobby" class="screen hidden">
   <div class="panel">
-    <h2 class="title-sm">LOBI</h2>
-    <div>Oda Kodu: <span id="lobbyCode"></span></div>
+    <h2 class="title-sm" data-i18n="lobby">LOBI</h2>
+    <div><span data-i18n="roomCode2">Oda Kodu:</span> <span id="lobbyCode"></span></div>
     <div id="lobbyPlayers" class="lobby-players"></div>
-    <button id="btnStart" class="pixel-btn hidden">BASLAT</button>
-    <div id="waitMsg" class="hint">Oda sahibinin baslatmasini bekle</div>
-    <button id="btnLeave" class="pixel-btn small">CIK</button>
+    <button id="btnStart" class="pixel-btn hidden" data-i18n="start">BASLAT</button>
+    <div id="waitMsg" class="hint" data-i18n="waitHost">Oda sahibinin baslatmasini bekle</div>
+    <button id="btnLeave" class="pixel-btn small" data-i18n="leave">CIK</button>
   </div>
 </div>
 
-<!-- SETTINGS -->
+<!-- SETTINGS (menu) -->
 <div id="settings" class="screen hidden">
   <div class="panel">
-    <h2 class="title-sm">AYARLAR</h2>
-    <label>Ses<input id="setVolume" type="range" min="0" max="100" value="50"/></label>
-    <label>Crosshair<input id="setCross" type="checkbox" checked/></label>
-    <button id="btnBack2" class="pixel-btn small">GERI</button>
+    <h2 class="title-sm" data-i18n="settingsTitle">AYARLAR</h2>
+    <label><span data-i18n="volume">Ses</span><input id="setVolume" type="range" min="0" max="100" value="50"/></label>
+    <label><span data-i18n="crosshair">Crosshair</span><input id="setCross" type="checkbox" checked/></label>
+    <div class="lang-row">
+      <span data-i18n="language">Dil</span>
+      <button id="btnLangTR" class="pixel-btn small lang-btn active-lang">TR</button>
+      <button id="btnLangEN" class="pixel-btn small lang-btn">EN</button>
+    </div>
+    <button id="btnBack2" class="pixel-btn small" data-i18n="back">GERI</button>
   </div>
 </div>
 
@@ -74,13 +79,27 @@
   </div>
   <div id="roundEnd" class="screen hidden overlay">
     <div class="panel">
-      <h2 class="title-sm">TUR BITTI</h2>
+      <h2 class="title-sm" data-i18n="roundEnd">TUR BITTI</h2>
       <div id="winnerLine"></div>
       <div id="finalBoard"></div>
-      <div class="hint">Yeni tur birazdan...</div>
+      <div class="hint" data-i18n="nextRound">Yeni tur birazdan...</div>
     </div>
   </div>
-  <div id="dead" class="dead hidden">ELENDIN</div>
+  <div id="dead" class="dead hidden" data-i18n="eliminated">ELENDIN</div>
+  <div id="pauseMenu" class="screen hidden overlay">
+    <div class="panel">
+      <h2 class="title-sm" data-i18n="settingsTitle">AYARLAR</h2>
+      <label><span data-i18n="volume">Ses</span><input id="pauseVolume" type="range" min="0" max="100" value="50"/></label>
+      <div class="lang-row">
+        <span data-i18n="language">Dil</span>
+        <button id="pauseLangTR" class="pixel-btn small lang-btn active-lang">TR</button>
+        <button id="pauseLangEN" class="pixel-btn small lang-btn">EN</button>
+      </div>
+      <button id="btnResume" class="pixel-btn" data-i18n="resume">DEVAM ET</button>
+      <button id="btnLeaveGame" class="pixel-btn" data-i18n="leaveGame">OYUNDAN CIK</button>
+      <div class="hint" data-i18n="escHint">ESC ile kapatabilirsin</div>
+    </div>
+  </div>
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
