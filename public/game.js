@@ -765,8 +765,48 @@ function render() {
   gctx.stroke();
 
   renderHUD();
+  renderMinimap();
 }
 requestAnimationFrame(render);
+
+const minimap = $('minimap');
+const mmctx = minimap.getContext('2d');
+function renderMinimap() {
+  const ss = state.serverState;
+  if (!ss) return;
+  const MW = minimap.width, MH = minimap.height;
+  const sx = MW / state.mapW, sy = MH / state.mapH;
+  mmctx.imageSmoothingEnabled = false;
+  // floor
+  mmctx.fillStyle = '#1a2226';
+  mmctx.fillRect(0, 0, MW, MH);
+  // walls
+  mmctx.fillStyle = '#7a5a2a';
+  for (const w of state.walls) {
+    mmctx.fillRect(Math.floor(w.x*sx), Math.floor(w.y*sy),
+      Math.max(1, Math.ceil(w.w*sx)), Math.max(1, Math.ceil(w.h*sy)));
+  }
+  // hearts
+  for (const h of ss.hearts) {
+    mmctx.fillStyle = '#ff3050';
+    mmctx.fillRect(Math.floor(h.x*sx)-1, Math.floor(h.y*sy)-1, 3, 3);
+  }
+  // players
+  for (const p of ss.players) {
+    if (!p.alive) continue;
+    const px = Math.floor(p.x*sx), py = Math.floor(p.y*sy);
+    mmctx.fillStyle = '#000';
+    mmctx.fillRect(px-3, py-3, 6, 6);
+    mmctx.fillStyle = p.id === socket.id ? '#ffd24a' : (p.color || '#fff');
+    mmctx.fillRect(px-2, py-2, 4, 4);
+  }
+  // viewport rectangle (what the player currently sees)
+  const W = gameCanvas.width, H = gameCanvas.height;
+  mmctx.strokeStyle = 'rgba(255, 210, 74, 0.7)';
+  mmctx.lineWidth = 1;
+  mmctx.strokeRect(Math.floor(camX*sx), Math.floor(camY*sy),
+    Math.ceil(W*sx), Math.ceil(H*sy));
+}
 
 function drawHeart(ctx, x, y) {
   // pixel heart
