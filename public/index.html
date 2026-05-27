@@ -12,6 +12,7 @@
     <h1 class="title">GOLD<span>WAVE</span></h1>
     <button id="btnPlay" class="pixel-btn" data-i18n="play">OYNA</button>
     <button id="btnSettings" class="pixel-btn" data-i18n="settings">AYARLAR</button>
+    <div id="classPicker" class="class-picker"></div>
     <div class="menu-map-wrap">
       <div class="menu-map-label">MAP PREVIEW</div>
       <canvas id="menuMinimap" width="400" height="300"></canvas>
@@ -34,6 +35,11 @@
   <div class="panel">
     <h2 class="title-sm" data-i18n="rooms">ODALAR</h2>
     <button id="btnBack1" class="pixel-btn small" data-i18n="back">GERI</button>
+    <div class="map-row">
+      <div class="hint">HARITA:</div>
+      <div id="mapList" class="map-list"></div>
+      <button id="btnEditMap" class="pixel-btn small">EDITOR</button>
+    </div>
     <button id="btnCreateRoom" class="pixel-btn" data-i18n="createRoom">ODA OLUSTUR</button>
     <div class="join-row">
       <input id="joinCode" data-i18n-ph="roomCode" placeholder="ODA KODU" maxlength="5"/>
@@ -44,11 +50,28 @@
   </div>
 </div>
 
+<!-- MAP EDITOR -->
+<div id="editor" class="screen hidden">
+  <div class="panel editor-panel">
+    <h2 class="title-sm">HARITA EDITORU</h2>
+    <div class="hint">Tıkla / sürükle: duvar koy veya sil</div>
+    <canvas id="editorCanvas"></canvas>
+    <div class="editor-row">
+      <input id="editorName" maxlength="24" placeholder="harita adı" />
+      <button id="btnSaveMap" class="pixel-btn small">KAYDET</button>
+      <button id="btnClearEditor" class="pixel-btn small">TEMIZLE</button>
+      <button id="btnDeleteMap" class="pixel-btn small">SIL</button>
+      <button id="btnCancelEditor" class="pixel-btn small">GERI</button>
+    </div>
+  </div>
+</div>
+
 <!-- LOBBY -->
 <div id="lobby" class="screen hidden">
   <div class="panel">
     <h2 class="title-sm" data-i18n="lobby">LOBI</h2>
     <div><span data-i18n="roomCode2">Oda Kodu:</span> <span id="lobbyCode" style="font-size:22px;color:#ffd24a;letter-spacing:4px;"></span></div>
+    <div id="lobbyMap" class="hint"></div>
     <div id="lobbyStatus" class="hint"></div>
     <div id="lobbyPlayers" class="lobby-players"></div>
     <button id="btnStart" class="pixel-btn hidden" data-i18n="start">BASLAT</button>
@@ -80,6 +103,8 @@
     <div id="timer" class="timer">10:00</div>
     <div id="hpbar" class="hpbar"><div id="hpfill"></div></div>
     <div id="ammo" class="ammo"><span id="ammoCur">30</span><span class="max">/30</span></div>
+    <div id="rocketBadge" class="rocket-badge hidden">🚀 0</div>
+    <button id="abilityBtn" class="ability-btn hidden"></button>
     <div id="killfeed" class="killfeed"></div>
   </div>
   <div id="roundEnd" class="screen hidden overlay">

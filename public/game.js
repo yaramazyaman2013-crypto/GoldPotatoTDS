@@ -190,11 +190,20 @@ const NAME_POOL = [
 const state = {
   name: NAME_POOL[Math.floor(Math.random()*NAME_POOL.length)] + Math.floor(Math.random()*1000),
   color: COLORS[Math.floor(Math.random()*8)],
+  cls: localStorage.getItem('gwClass') || 'cyber',
+  mapName: 'default',
   roomId: null, ownerId: null, selfId: null,
   isHost: false,
   inLobby: false, inGame: false,
   walls: [], mapW: 1600, mapH: 1200,
   endsAt: 0, serverState: null, killfeed: [],
+};
+
+const CLASS_INFO = {
+  cyber:    { label: 'CYBER',    desc: 'Her 2.5dk +1 füze',          color: '#7afcff' },
+  engineer: { label: 'MUHENDIS', desc: '3dk: Taret koy (B tuşu)',    color: '#ffd24a' },
+  medic:    { label: 'DOKTOR',   desc: '3.5dk: Heal pet (V tuşu)',   color: '#7ad24a' },
+  tank:     { label: 'TANK',     desc: '5 kill → 20sn tank modu',    color: '#ff5577' },
 };
 
 // ===== Robot pixel art =====
@@ -346,7 +355,13 @@ $('btnCreateRoom').addEventListener('click', () => {
   if (connecting) return;
   setConnecting(true);
   setNetStatus(I18N[currentLang].connecting);
-  socket.emit('createRoom', { name: state.name, color: state.color }, (res) => {
+  const payload = { name: state.name, color: state.color, cls: state.cls, mapName: state.mapName };
+  // Custom maps: send walls inline
+  const custom = JSON.parse(localStorage.getItem('gwCustomMaps') || '{}');
+  if (state.mapName !== 'default' && custom[state.mapName]) {
+    payload.customMap = custom[state.mapName];
+  }
+  socket.emit('createRoom', payload, (res) => {
     setConnecting(false);
     setNetStatus('');
     if (res && res.ok) {
@@ -369,7 +384,7 @@ $('btnJoinCode').addEventListener('click', () => {
 function joinRoom(code) {
   setConnecting(true);
   setNetStatus(I18N[currentLang].connecting);
-  socket.emit('joinRoom', { roomId: code, name: state.name, color: state.color }, (res) => {
+  socket.emit('joinRoom', { roomId: code, name: state.name, color: state.color, cls: state.cls }, (res) => {
     setConnecting(false);
     setNetStatus('');
     if (res && res.ok) {
@@ -385,17 +400,24 @@ function joinRoom(code) {
 
 function renderLobby(room) {
   state.ownerId = room.ownerId;
+  if (room.mapName) state.mapName = room.mapName;
   const root = $('lobbyPlayers');
   root.innerHTML = '';
   room.players.forEach(p => {
     const chip = document.createElement('div');
     chip.className = 'player-chip';
-    chip.innerHTML = `<span class="swatch" style="background:${p.color}"></span><span>${p.name}${p.id===room.ownerId?' (host)':''}</span>`;
+    const cinfo = CLASS_INFO[p.cls] || { label: p.cls || '?', color: '#fff' };
+    chip.innerHTML =
+      `<span class="swatch" style="background:${p.color}"></span>` +
+      `<span>${p.name}${p.id===room.ownerId?' (host)':''}</span>` +
+      `<span class="cls-tag" style="color:${cinfo.color}">[${cinfo.label}]</span>`;
     root.appendChild(chip);
   });
   const isHost = room.ownerId === socket.id;
   $('btnStart').classList.toggle('hidden', !isHost);
   $('waitMsg').classList.toggle('hidden', isHost);
+  const mapEl = $('lobbyMap');
+  if (mapEl) mapEl.textContent = 'Harita: ' + (room.mapName || 'default');
 }
 
 function enterLobby(roomId, ownerId) {
@@ -442,7 +464,7 @@ window.addEventListener('resize', resize);
 resize();
 
 const keys = { w:false,a:false,s:false,d:false };
-let mouseX = 0, mouseY = 0, mouseDown = false;
+let mouseX = 0, mouseY = 0, leftDown = false, rightDown = false;
 
 window.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
@@ -453,6 +475,8 @@ window.addEventListener('keydown', e => {
       socket.emit('reload');
     }
   }
+  if (k === 'b' && state.inGame) socket.emit('placeTurret');
+  if (k === 'v' && state.inGame) socket.emit('placePet');
   if (e.key === 'Escape' && state.inGame) { togglePause(); e.preventDefault(); }
 });
 window.addEventListener('keyup', e => {
@@ -463,8 +487,14 @@ gameCanvas.addEventListener('mousemove', e => {
   const r = gameCanvas.getBoundingClientRect();
   mouseX = e.clientX - r.left; mouseY = e.clientY - r.top;
 });
-gameCanvas.addEventListener('mousedown', e => { if (e.button===0) mouseDown = true; });
-window.addEventListener('mouseup', e => { if (e.button===0) mouseDown = false; });
+gameCanvas.addEventListener('mousedown', e => {
+  if (e.button === 0) leftDown = true;
+  if (e.button === 2) { rightDown = true; e.preventDefault(); }
+});
+window.addEventListener('mouseup', e => {
+  if (e.button === 0) leftDown = false;
+  if (e.button === 2) rightDown = false;
+});
 gameCanvas.addEventListener('contextmenu', e => e.preventDefault());
 
 function computeAngle() {
@@ -498,7 +528,7 @@ $('btnLeaveGame').addEventListener('click', () => {
 // Input loop: ~33 Hz
 setInterval(() => {
   if (!state.inGame) return;
-  socket.emit('input', { keys, angle: computeAngle(), mouseDown });
+  socket.emit('input', { keys, angle: computeAngle(), leftDown, rightDown });
 }, 30);
 
 // Footstep sounds
@@ -518,10 +548,21 @@ socket.on('roundStart', (data) => {
   state.mapW = data.mapW; state.mapH = data.mapH;
   state.endsAt = data.endsAt;
   state.inGame = true; state.killfeed = [];
+  state.cyberAnchor = Date.now();
   lastAmmo = null; wasReloading = false;
   $('dead').classList.add('hidden');
   $('roundEnd').classList.add('hidden');
   show('game');
+});
+
+// Reset cyber anchor when this player auto-gains a rocket
+let lastRocketCount = 0;
+socket.on('state', (s) => {
+  const me = s.players.find(p => p.id === socket.id);
+  if (me && state.cls === 'cyber' && me.rockets > lastRocketCount) {
+    state.cyberAnchor = Date.now();
+  }
+  if (me) lastRocketCount = me.rockets;
 });
 
 let lastAmmo = null, wasReloading = false;
@@ -577,20 +618,44 @@ function renderHUD() {
   $('hpfill').style.width = Math.min(100, hp/maxHp*100) + '%';
   // dead overlay
   $('dead').classList.toggle('hidden', !me || me.alive);
-  // ammo
+  // ammo (bullets) — rockets shown separately (right click)
   if (me) {
-    if (me.rockets > 0) {
-      $('ammoCur').textContent = '🚀' + me.rockets;
-      const maxEl = $('ammo').querySelector('.max'); if (maxEl) maxEl.textContent = '';
-      $('ammo').classList.add('hasRocket');
-      $('ammo').classList.remove('reloading');
-    } else {
-      $('ammoCur').textContent = me.reloading ? '...' : me.ammo;
-      const maxEl = $('ammo').querySelector('.max');
-      if (maxEl) maxEl.textContent = '/' + (me.maxAmmo || 30);
-      $('ammo').classList.toggle('reloading', !!me.reloading);
-      $('ammo').classList.remove('hasRocket');
+    $('ammoCur').textContent = me.reloading ? '...' : me.ammo;
+    const maxEl = $('ammo').querySelector('.max');
+    if (maxEl) maxEl.textContent = '/' + (me.maxAmmo || 30);
+    $('ammo').classList.toggle('reloading', !!me.reloading);
+  }
+  // rocket count badge
+  const rb = $('rocketBadge');
+  if (rb) {
+    if (me && me.rockets > 0) { rb.textContent = '🚀 ' + me.rockets + '  (R-CLICK)'; rb.classList.remove('hidden'); }
+    else rb.classList.add('hidden');
+  }
+  // class ability cooldown
+  const ab = $('abilityBtn');
+  if (ab && me) {
+    const now = Date.now();
+    let label = '', ready = false, action = null;
+    if (me.cls === 'engineer') {
+      const rem = Math.max(0, (me.turretReadyAt||0) - now);
+      ready = rem === 0; action = 'placeTurret';
+      label = ready ? 'TARET KOY (B)' : 'TARET ' + Math.ceil(rem/1000) + 's';
+    } else if (me.cls === 'medic') {
+      const rem = Math.max(0, (me.petReadyAt||0) - now);
+      ready = rem === 0; action = 'placePet';
+      label = ready ? 'PET KOY (V)' : 'PET ' + Math.ceil(rem/1000) + 's';
+    } else if (me.cls === 'cyber') {
+      const rem = Math.max(0, 150000 - (now - (state.cyberAnchor||now)));
+      label = 'FUZE ' + Math.ceil(rem/1000) + 's';
+    } else if (me.cls === 'tank') {
+      label = me.tank ? 'TANK ' + Math.ceil((me.tankUntil-now)/1000) + 's' : 'KILLS ' + (me.kills||0) + '/5';
     }
+    if (label) {
+      ab.textContent = label;
+      ab.classList.remove('hidden');
+      ab.dataset.action = action || '';
+      ab.classList.toggle('ready', ready);
+    } else ab.classList.add('hidden');
   }
   // leaderboard
   const lb = $('leaderboard');
@@ -750,7 +815,47 @@ function render() {
   }
   drawExplosions();
 
+  // pets (heal totems)
+  if (ss.pets) {
+    for (const pt of ss.pets) {
+      const x = pt.x - camX, y = pt.y - camY;
+      const pulse = (Date.now() / 200) % (Math.PI*2);
+      gctx.fillStyle = 'rgba(122,210,74,0.18)';
+      gctx.beginPath(); gctx.arc(x, y, 35 + Math.sin(pulse)*3, 0, Math.PI*2); gctx.fill();
+      // body
+      gctx.fillStyle = '#0a0a0a'; gctx.fillRect(x-8, y-8, 16, 16);
+      gctx.fillStyle = '#7ad24a'; gctx.fillRect(x-6, y-6, 12, 12);
+      gctx.fillStyle = '#fff'; gctx.fillRect(x-1, y-4, 2, 8); gctx.fillRect(x-4, y-1, 8, 2);
+    }
+  }
+  // turrets
+  if (ss.turrets) {
+    for (const tu of ss.turrets) {
+      const x = tu.x - camX, y = tu.y - camY;
+      // base
+      gctx.fillStyle = '#0a0a0a'; gctx.fillRect(x-10, y-10, 20, 20);
+      gctx.fillStyle = '#5a5a6a'; gctx.fillRect(x-9, y-9, 18, 18);
+      gctx.fillStyle = '#8a8a9a'; gctx.fillRect(x-9, y-9, 18, 2);
+      // dome
+      gctx.fillStyle = '#1a1a24'; gctx.fillRect(x-5, y-5, 10, 10);
+      // barrel
+      gctx.save(); gctx.translate(x, y); gctx.rotate(tu.angle||0);
+      gctx.fillStyle = '#1a1a24'; gctx.fillRect(0, -2, 14, 4);
+      gctx.fillStyle = '#3a3a4a'; gctx.fillRect(0, -2, 14, 1);
+      gctx.restore();
+      // hp bar
+      const hpw = 18, hpf = Math.max(0, tu.hp / 8) * hpw;
+      gctx.fillStyle = '#000'; gctx.fillRect(x-9, y-14, hpw, 3);
+      gctx.fillStyle = '#7ad24a'; gctx.fillRect(x-9, y-14, hpf, 3);
+    }
+  }
+
   for (const p of ss.players) {
+    if (p.tank) {
+      const pulse = 0.6 + 0.4 * Math.sin(Date.now()/120);
+      gctx.fillStyle = `rgba(255,80,90,${pulse*0.35})`;
+      gctx.beginPath(); gctx.arc(p.x-camX, p.y-camY, 28, 0, Math.PI*2); gctx.fill();
+    }
     drawRobotTopDown(gctx, p.x-camX, p.y-camY, p.color, p.angle, p.alive);
     gctx.fillStyle='#000'; gctx.fillRect(p.x-camX-30, p.y-camY-30, 60, 12);
     gctx.fillStyle = p.id===socket.id ? '#ffd24a' : '#fff';
@@ -850,4 +955,198 @@ function renderMenuMinimap() {
   menuMMctx.fillStyle='rgba(122,252,255,0.20)'; menuMMctx.fillRect(0,mmScanY,MM_W,1);
   mmScanY = (mmScanY+1)%MM_H;
 }
-setInterval(renderMenuMinimap, 40);
+// Only render minimap when menu is visible — saves CPU during gameplay
+setInterval(() => {
+  if (!$('menu').classList.contains('hidden')) renderMenuMinimap();
+}, 100);
+
+// ============================================================
+// CLASS PICKER (menu)
+// ============================================================
+function renderClassPicker() {
+  const root = $('classPicker');
+  if (!root) return;
+  root.innerHTML = '';
+  for (const [key, info] of Object.entries(CLASS_INFO)) {
+    const b = document.createElement('button');
+    b.className = 'class-btn pixel-btn small';
+    b.innerHTML = `<div class="cls-label" style="color:${info.color}">${info.label}</div><div class="cls-desc">${info.desc}</div>`;
+    if (state.cls === key) b.classList.add('selected');
+    b.addEventListener('click', () => {
+      state.cls = key;
+      localStorage.setItem('gwClass', key);
+      renderClassPicker();
+      if (state.roomId) socket.emit('changeClass', { cls: key });
+    });
+    root.appendChild(b);
+  }
+}
+renderClassPicker();
+
+// ============================================================
+// MAP PICKER + EDITOR
+// ============================================================
+function loadCustomMaps() {
+  try { return JSON.parse(localStorage.getItem('gwCustomMaps') || '{}'); }
+  catch(e) { return {}; }
+}
+function saveCustomMaps(maps) {
+  localStorage.setItem('gwCustomMaps', JSON.stringify(maps));
+}
+
+function renderMapList() {
+  const root = $('mapList');
+  if (!root) return;
+  root.innerHTML = '';
+  const maps = ['default', ...Object.keys(loadCustomMaps())];
+  maps.forEach(name => {
+    const b = document.createElement('button');
+    b.className = 'pixel-btn small map-btn';
+    b.textContent = name;
+    if (state.mapName === name) b.classList.add('selected');
+    b.addEventListener('click', () => {
+      state.mapName = name;
+      renderMapList();
+    });
+    root.appendChild(b);
+  });
+}
+
+// ===== Editor =====
+const EDITOR = {
+  gridW: 40, gridH: 30, cellSize: 40, // 40*40=1600x1200
+  grid: null, // 2D array boolean
+  active: false,
+};
+function newGrid() {
+  return Array.from({length: EDITOR.gridH}, () => Array(EDITOR.gridW).fill(false));
+}
+function gridToWalls(grid) {
+  // Each filled cell becomes a 40x40 wall
+  const out = [];
+  for (let y = 0; y < EDITOR.gridH; y++)
+    for (let x = 0; x < EDITOR.gridW; x++) {
+      if (grid[y][x]) out.push({x: x*EDITOR.cellSize, y: y*EDITOR.cellSize, w: EDITOR.cellSize, h: EDITOR.cellSize});
+    }
+  return out;
+}
+function wallsToGrid(walls) {
+  const g = newGrid();
+  for (const w of walls) {
+    const x0 = Math.max(0, Math.floor(w.x / EDITOR.cellSize));
+    const y0 = Math.max(0, Math.floor(w.y / EDITOR.cellSize));
+    const x1 = Math.min(EDITOR.gridW, Math.ceil((w.x+w.w) / EDITOR.cellSize));
+    const y1 = Math.min(EDITOR.gridH, Math.ceil((w.y+w.h) / EDITOR.cellSize));
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) g[y][x] = true;
+  }
+  return g;
+}
+
+function openEditor(name) {
+  EDITOR.active = true;
+  if (name && loadCustomMaps()[name]) {
+    EDITOR.grid = wallsToGrid(loadCustomMaps()[name]);
+    $('editorName').value = name;
+  } else {
+    EDITOR.grid = newGrid();
+    // bordering walls preset
+    for (let x = 0; x < EDITOR.gridW; x++) { EDITOR.grid[0][x] = true; EDITOR.grid[EDITOR.gridH-1][x] = true; }
+    for (let y = 0; y < EDITOR.gridH; y++) { EDITOR.grid[y][0] = true; EDITOR.grid[y][EDITOR.gridW-1] = true; }
+    $('editorName').value = name || 'map' + Math.floor(Math.random()*100);
+  }
+  show('editor');
+  drawEditor();
+}
+
+function drawEditor() {
+  const cv = $('editorCanvas');
+  if (!cv) return;
+  const ctx = cv.getContext('2d');
+  const cs = 16; // px per cell on screen
+  cv.width = EDITOR.gridW * cs;
+  cv.height = EDITOR.gridH * cs;
+  ctx.imageSmoothingEnabled = false;
+  // grass bg
+  ctx.fillStyle = '#3e5a30'; ctx.fillRect(0,0,cv.width,cv.height);
+  // grid
+  ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+  for (let x = 0; x <= EDITOR.gridW; x++) { ctx.beginPath(); ctx.moveTo(x*cs,0); ctx.lineTo(x*cs,cv.height); ctx.stroke(); }
+  for (let y = 0; y <= EDITOR.gridH; y++) { ctx.beginPath(); ctx.moveTo(0,y*cs); ctx.lineTo(cv.width,y*cs); ctx.stroke(); }
+  // walls
+  for (let y = 0; y < EDITOR.gridH; y++) for (let x = 0; x < EDITOR.gridW; x++) {
+    if (!EDITOR.grid[y][x]) continue;
+    ctx.fillStyle = '#3a3a4a'; ctx.fillRect(x*cs, y*cs, cs, cs);
+    ctx.fillStyle = '#6a6a7a'; ctx.fillRect(x*cs, y*cs, cs, 2);
+    ctx.fillStyle = '#1a1a24'; ctx.fillRect(x*cs, y*cs+cs-2, cs, 2);
+  }
+}
+
+(function setupEditorEvents(){
+  const cv = $('editorCanvas');
+  if (!cv) return;
+  let dragMode = null; // true = paint, false = erase
+  function paintAt(e) {
+    const r = cv.getBoundingClientRect();
+    const x = Math.floor((e.clientX - r.left) / 16);
+    const y = Math.floor((e.clientY - r.top)  / 16);
+    if (x<0||y<0||x>=EDITOR.gridW||y>=EDITOR.gridH) return;
+    EDITOR.grid[y][x] = dragMode;
+    drawEditor();
+  }
+  cv.addEventListener('mousedown', (e) => {
+    const r = cv.getBoundingClientRect();
+    const x = Math.floor((e.clientX - r.left) / 16);
+    const y = Math.floor((e.clientY - r.top)  / 16);
+    if (x<0||y<0||x>=EDITOR.gridW||y>=EDITOR.gridH) return;
+    dragMode = !EDITOR.grid[y][x];
+    EDITOR.grid[y][x] = dragMode;
+    drawEditor();
+  });
+  cv.addEventListener('mousemove', (e) => { if (e.buttons === 1 && dragMode !== null) paintAt(e); });
+  window.addEventListener('mouseup', () => { dragMode = null; });
+})();
+
+const btnEditMap = $('btnEditMap');
+if (btnEditMap) btnEditMap.addEventListener('click', () => openEditor(state.mapName !== 'default' ? state.mapName : null));
+const btnClearEditor = $('btnClearEditor');
+if (btnClearEditor) btnClearEditor.addEventListener('click', () => { EDITOR.grid = newGrid(); drawEditor(); });
+const btnSaveMap = $('btnSaveMap');
+if (btnSaveMap) btnSaveMap.addEventListener('click', () => {
+  const name = ($('editorName').value || '').trim().slice(0, 24);
+  if (!name || name === 'default') return alert('Geçerli bir isim gir');
+  const walls = gridToWalls(EDITOR.grid);
+  const maps = loadCustomMaps();
+  maps[name] = walls;
+  saveCustomMaps(maps);
+  state.mapName = name;
+  renderMapList();
+  show('rooms');
+});
+const btnCancelEditor = $('btnCancelEditor');
+if (btnCancelEditor) btnCancelEditor.addEventListener('click', () => show('rooms'));
+const btnDeleteMap = $('btnDeleteMap');
+if (btnDeleteMap) btnDeleteMap.addEventListener('click', () => {
+  const name = ($('editorName').value || '').trim();
+  if (!name || name === 'default') return;
+  const maps = loadCustomMaps();
+  delete maps[name];
+  saveCustomMaps(maps);
+  if (state.mapName === name) state.mapName = 'default';
+  renderMapList();
+  show('rooms');
+});
+
+renderMapList();
+
+// ===== Ability button (HUD) =====
+const abilityBtn = $('abilityBtn');
+if (abilityBtn) abilityBtn.addEventListener('click', () => {
+  const action = abilityBtn.dataset.action;
+  if (action === 'placeTurret') socket.emit('placeTurret');
+  else if (action === 'placePet') socket.emit('placePet');
+});
+
+// Track cyber rocket cooldown anchor (server sends timestamps via state — derive locally)
+socket.on('tankMode', ({id, until}) => {
+  // (visual handled via state.tank flag)
+});

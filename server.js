@@ -36,14 +36,31 @@ const C = {
   MAG_SIZE: 30,
   RELOAD_MS: 1500,
   TICK_MS: 25,
-  // Rocket pickup
+  BROADCAST_EVERY: 2,        // state broadcast every N ticks (~50ms)
+  // Rocket
   ROCKET_SPAWN_MS: 35 * 1000,
   MAX_ROCKET_PICKUPS: 3,
-  ROCKET_CHARGES: 2,         // shots per pickup
+  ROCKET_CHARGES: 2,
   ROCKET_SPEED: 11,
   ROCKET_R: 6,
-  ROCKET_FIRE_COOLDOWN: 320, // slower fire rate
-  ROCKET_AOE_R: 70,          // splash radius
+  ROCKET_FIRE_COOLDOWN: 320,
+  ROCKET_AOE_R: 70,
+  // Classes
+  CYBER_ROCKET_INTERVAL: 150 * 1000,
+  ENGINEER_TURRET_CD:    180 * 1000,
+  MEDIC_PET_CD:          210 * 1000,
+  TANK_KILLS_REQUIRED:   5,
+  TANK_DURATION:         20 * 1000,
+  // Turret
+  TURRET_HP: 8,
+  TURRET_RANGE: 280,
+  TURRET_FIRE_CD: 600,
+  TURRET_BULLET_SPEED: 12,
+  // Pet (heal totem)
+  PET_DURATION: 60 * 1000,
+  PET_HEAL_R: 35,
+  PET_HEAL_PER_TICK: 1,      // hp per server tick (~25ms) → fast regen
+  PET_HEAL_EVERY: 250,       // ms between heal ticks
 };
 
 // ============================================================
@@ -112,7 +129,28 @@ function buildWalls() {
 
   return w;
 }
-const WALLS = buildWalls();
+const DEFAULT_WALLS = buildWalls();
+
+// Custom maps shared between clients (in-memory; the room host can save+share).
+// Map: name -> walls array
+const savedMaps = new Map();
+savedMaps.set('default', DEFAULT_WALLS);
+
+function getMapWalls(mapName) {
+  return savedMaps.get(mapName) || DEFAULT_WALLS;
+}
+
+function sanitizeWalls(walls) {
+  const out = [];
+  for (const w of walls) {
+    if (!w || typeof w.x !== 'number' || typeof w.y !== 'number'
+      || typeof w.w !== 'number' || typeof w.h !== 'number') continue;
+    if (w.w <= 0 || w.h <= 0 || w.w > 1600 || w.h > 1200) continue;
+    out.push({x: w.x|0, y: w.y|0, w: w.w|0, h: w.h|0});
+    if (out.length > 2000) break;
+  }
+  return out;
+}
 
 function circleRect(cx, cy, cr, r) {
   const nx = Math.max(r.x, Math.min(cx, r.x + r.w));
@@ -120,15 +158,15 @@ function circleRect(cx, cy, cr, r) {
   const dx = cx - nx, dy = cy - ny;
   return dx*dx + dy*dy < cr*cr;
 }
-function hitsWall(x, y, r) {
-  for (const w of WALLS) if (circleRect(x, y, r, w)) return true;
+function hitsWallList(walls, x, y, r) {
+  for (const w of walls) if (circleRect(x, y, r, w)) return true;
   return false;
 }
-function randomSpawn() {
+function randomSpawnIn(walls) {
   for (let i = 0; i < 200; i++) {
     const x = 60 + Math.random() * (C.MAP_W - 120);
     const y = 60 + Math.random() * (C.MAP_H - 120);
-    if (!hitsWall(x, y, C.PLAYER_R + 4)) return {x, y};
+    if (!hitsWallList(walls, x, y, C.PLAYER_R + 4)) return {x, y};
   }
   return {x: 80, y: 80};
 }
@@ -145,28 +183,38 @@ function makeCode() {
   return s;
 }
 
-function newRoom(ownerSocketId, ownerName, ownerColor) {
+function newRoom(ownerSocketId, ownerName, ownerColor, ownerCls, mapName) {
   let code;
   do { code = makeCode(); } while (rooms.has(code));
   const room = {
     code, ownerId: ownerSocketId,
     started: false,
+    mapName: mapName || 'default',
+    walls: getMapWalls(mapName),
     players: new Map(),
     bullets: [], hearts: [], rocketPickups: [],
+    turrets: [], pets: [],
     roundEndsAt: 0, lastHeartSpawn: 0, lastRocketSpawn: 0,
     nextBulletId: 1, nextHeartId: 1, nextRocketId: 1,
+    nextTurretId: 1, nextPetId: 1,
     tickHandle: null, pendingRestart: null,
+    tickCount: 0,
   };
-  addPlayer(room, ownerSocketId, ownerName, ownerColor);
+  addPlayer(room, ownerSocketId, ownerName, ownerColor, ownerCls);
   rooms.set(code, room);
   return room;
 }
 
-function addPlayer(room, id, name, color) {
-  const s = randomSpawn();
-  room.players.set(id, {
+const VALID_CLASSES = ['cyber','engineer','medic','tank'];
+
+function addPlayer(room, id, name, color, cls) {
+  const s = randomSpawnIn(room.walls);
+  const safeCls = VALID_CLASSES.includes(cls) ? cls : 'cyber';
+  const player = {
+    _room: room,
     id, name: (name||'Player').slice(0,16),
     color: color || '#ff5577',
+    cls: safeCls,
     x: s.x, y: s.y, angle: 0,
     hp: C.HP_PER_LIFE, lives: C.START_LIVES,
     alive: true,
@@ -174,17 +222,25 @@ function addPlayer(room, id, name, color) {
     rockets: 0,
     kills: 0,
     keys: {w:false,a:false,s:false,d:false},
-    mouseDown: false, fireCd: 0,
-  });
+    leftDown: false, rightDown: false, fireCd: 0,
+    // Class state
+    lastCyberRocketAt: Date.now(),
+    turretReadyAt: Date.now(),
+    petReadyAt: Date.now(),
+    tankUntil: 0,
+    tankKills: 0, // resets each round; counts kills since last tank form
+  };
+  room.players.set(id, player);
 }
 
 function publicRoom(room) {
   return {
     id: room.code, ownerId: room.ownerId,
     started: room.started,
+    mapName: room.mapName,
     count: room.players.size, max: C.MAX_PLAYERS,
     players: [...room.players.values()].map(p => ({
-      id: p.id, name: p.name, color: p.color,
+      id: p.id, name: p.name, color: p.color, cls: p.cls,
     })),
   };
 }
@@ -194,7 +250,7 @@ function spawnHeart(room) {
   for (let i = 0; i < 50; i++) {
     const x = 60 + Math.random() * (C.MAP_W - 120);
     const y = 60 + Math.random() * (C.MAP_H - 120);
-    if (!hitsWall(x, y, 10)) { room.hearts.push({id: room.nextHeartId++, x, y}); return; }
+    if (!hitsWallList(room.walls,x, y, 10)) { room.hearts.push({id: room.nextHeartId++, x, y}); return; }
   }
 }
 
@@ -203,30 +259,39 @@ function spawnRocketPickup(room) {
   for (let i = 0; i < 50; i++) {
     const x = 60 + Math.random() * (C.MAP_W - 120);
     const y = 60 + Math.random() * (C.MAP_H - 120);
-    if (!hitsWall(x, y, 12)) { room.rocketPickups.push({id: room.nextRocketId++, x, y}); return; }
+    if (!hitsWallList(room.walls,x, y, 12)) { room.rocketPickups.push({id: room.nextRocketId++, x, y}); return; }
   }
 }
 
 function startRound(room) {
   room.started = true;
   room.bullets = []; room.hearts = []; room.rocketPickups = [];
+  room.turrets = []; room.pets = [];
   room.roundEndsAt = Date.now() + C.ROUND_MS;
-  room.lastHeartSpawn = Date.now();
-  room.lastRocketSpawn = Date.now();
+  const now = Date.now();
+  room.lastHeartSpawn = now;
+  room.lastRocketSpawn = now;
   room.nextBulletId = 1; room.nextHeartId = 1; room.nextRocketId = 1;
+  room.nextTurretId = 1; room.nextPetId = 1;
+  room.tickCount = 0;
   for (const p of room.players.values()) {
-    const s = randomSpawn();
+    const s = randomSpawnIn(room.walls);
     p.x = s.x; p.y = s.y;
     p.hp = C.HP_PER_LIFE; p.lives = C.START_LIVES;
     p.alive = true; p.kills = 0; p.angle = 0; p.fireCd = 0;
     p.ammo = C.MAG_SIZE; p.reloading = false; p.reloadEndsAt = 0;
     p.rockets = 0;
+    p.lastCyberRocketAt = now;
+    p.turretReadyAt = now + 30000; // 30sn warmup
+    p.petReadyAt = now + 30000;
+    p.tankUntil = 0; p.tankKills = 0;
   }
   for (let i = 0; i < 4; i++) spawnHeart(room);
   spawnRocketPickup(room);
   io.to(room.code).emit('roundStart', {
     endsAt: room.roundEndsAt,
-    mapW: C.MAP_W, mapH: C.MAP_H, walls: WALLS,
+    mapW: C.MAP_W, mapH: C.MAP_H, walls: room.walls,
+    mapName: room.mapName,
   });
   if (room.tickHandle) clearInterval(room.tickHandle);
   room.tickHandle = setInterval(() => tick(room), C.TICK_MS);
@@ -254,17 +319,20 @@ function checkRoundOver(room) {
   if (Date.now() >= room.roundEndsAt) return endRound(room);
 }
 
-function tryMove(p, dx, dy) {
+function tryMove(p, dx, dy, r) {
+  const rr = r || C.PLAYER_R;
+  const walls = p._room.walls;
   let nx = p.x+dx, ny = p.y+dy;
-  nx = Math.max(C.PLAYER_R, Math.min(C.MAP_W-C.PLAYER_R, nx));
-  ny = Math.max(C.PLAYER_R, Math.min(C.MAP_H-C.PLAYER_R, ny));
-  if (!hitsWall(nx, p.y, C.PLAYER_R)) p.x = nx;
-  if (!hitsWall(p.x, ny, C.PLAYER_R)) p.y = ny;
+  nx = Math.max(rr, Math.min(C.MAP_W-rr, nx));
+  ny = Math.max(rr, Math.min(C.MAP_H-rr, ny));
+  if (!hitsWallList(walls, nx, p.y, rr)) p.x = nx;
+  if (!hitsWallList(walls, p.x, ny, rr)) p.y = ny;
 }
 
 function tick(room) {
   if (!room.started) return;
   const now = Date.now();
+  room.tickCount++;
 
   if (now - room.lastHeartSpawn >= C.HEART_SPAWN_MS) {
     spawnHeart(room); room.lastHeartSpawn = now;
@@ -275,38 +343,53 @@ function tick(room) {
 
   for (const p of room.players.values()) {
     if (!p.alive) continue;
+
+    // Class passive: Cyber auto-rockets
+    if (p.cls === 'cyber' && now - p.lastCyberRocketAt >= C.CYBER_ROCKET_INTERVAL) {
+      p.rockets += 1;
+      p.lastCyberRocketAt = now;
+    }
+    // Tank mode expiry
+    const isTank = now < p.tankUntil;
+    const speedMul = isTank ? 0.7 : 1;
+    const playerR = isTank ? C.PLAYER_R + 6 : C.PLAYER_R;
+
     let dx = 0, dy = 0;
     if (p.keys.w) dy -= 1; if (p.keys.s) dy += 1;
     if (p.keys.a) dx -= 1; if (p.keys.d) dx += 1;
     if (dx || dy) {
       const len = Math.hypot(dx, dy);
-      tryMove(p, dx/len*C.PLAYER_SPEED, dy/len*C.PLAYER_SPEED);
+      tryMove(p, dx/len*C.PLAYER_SPEED*speedMul, dy/len*C.PLAYER_SPEED*speedMul, playerR);
     }
     p.fireCd -= C.TICK_MS;
     if (p.reloading && now >= p.reloadEndsAt) {
       p.reloading = false; p.ammo = C.MAG_SIZE;
     }
-    if (p.mouseDown && p.fireCd <= 0 && !p.reloading) {
-      if (p.rockets > 0) {
-        p.fireCd = C.ROCKET_FIRE_COOLDOWN; p.rockets--;
-        const m = 22;
-        room.bullets.push({
-          id: room.nextBulletId++, owner: p.id, type: 'rocket',
-          x: p.x+Math.cos(p.angle)*m, y: p.y+Math.sin(p.angle)*m,
-          vx: Math.cos(p.angle)*C.ROCKET_SPEED, vy: Math.sin(p.angle)*C.ROCKET_SPEED,
-          angle: p.angle, life: 120,
-        });
-      } else if (p.ammo > 0) {
-        p.fireCd = C.FIRE_COOLDOWN; p.ammo--;
-        const m = 20;
-        room.bullets.push({
-          id: room.nextBulletId++, owner: p.id, type: 'bullet',
-          x: p.x+Math.cos(p.angle)*m, y: p.y+Math.sin(p.angle)*m,
-          vx: Math.cos(p.angle)*C.BULLET_SPEED, vy: Math.sin(p.angle)*C.BULLET_SPEED,
-          life: 80,
-        });
-        if (p.ammo === 0) { p.reloading = true; p.reloadEndsAt = now + C.RELOAD_MS; }
-      }
+
+    // Right click = rocket (if available)
+    if (p.rightDown && p.fireCd <= 0 && p.rockets > 0) {
+      p.fireCd = C.ROCKET_FIRE_COOLDOWN; p.rockets--;
+      const m = 22;
+      room.bullets.push({
+        id: room.nextBulletId++, owner: p.id, type: 'rocket',
+        x: p.x+Math.cos(p.angle)*m, y: p.y+Math.sin(p.angle)*m,
+        vx: Math.cos(p.angle)*C.ROCKET_SPEED, vy: Math.sin(p.angle)*C.ROCKET_SPEED,
+        angle: p.angle, life: 120,
+      });
+    }
+    // Left click = bullet
+    if (p.leftDown && p.fireCd <= 0 && p.ammo > 0 && !p.reloading) {
+      p.fireCd = isTank ? Math.floor(C.FIRE_COOLDOWN * 0.6) : C.FIRE_COOLDOWN;
+      p.ammo--;
+      const m = 20;
+      const bulletDmg = isTank ? 2 : 1;
+      room.bullets.push({
+        id: room.nextBulletId++, owner: p.id, type: 'bullet', dmg: bulletDmg,
+        x: p.x+Math.cos(p.angle)*m, y: p.y+Math.sin(p.angle)*m,
+        vx: Math.cos(p.angle)*C.BULLET_SPEED, vy: Math.sin(p.angle)*C.BULLET_SPEED,
+        life: 80,
+      });
+      if (p.ammo === 0) { p.reloading = true; p.reloadEndsAt = now + C.RELOAD_MS; }
     }
     for (let i = room.hearts.length-1; i >= 0; i--) {
       const h = room.hearts[i];
@@ -314,7 +397,6 @@ function tick(room) {
         p.lives++; room.hearts.splice(i,1);
       }
     }
-    // rocket pickup
     for (let i = room.rocketPickups.length-1; i >= 0; i--) {
       const r = room.rocketPickups[i];
       if ((r.x-p.x)**2+(r.y-p.y)**2 < (C.PLAYER_R+12)**2) {
@@ -324,15 +406,68 @@ function tick(room) {
     }
   }
 
+  // Pets: heal nearby allies, expire after duration
+  for (let pi = room.pets.length-1; pi >= 0; pi--) {
+    const pet = room.pets[pi];
+    if (now >= pet.expiresAt) { room.pets.splice(pi, 1); continue; }
+    if (now - (pet.lastHealAt||0) >= C.PET_HEAL_EVERY) {
+      pet.lastHealAt = now;
+      for (const pl of room.players.values()) {
+        if (!pl.alive) continue;
+        const d2 = (pl.x-pet.x)**2 + (pl.y-pet.y)**2;
+        if (d2 < (C.PLAYER_R + C.PET_HEAL_R)**2 && pl.hp < C.HP_PER_LIFE) {
+          pl.hp = Math.min(C.HP_PER_LIFE, pl.hp + C.PET_HEAL_PER_TICK);
+        }
+      }
+    }
+  }
+
+  // Turrets: target nearest enemy in range, fire
+  for (let ti = room.turrets.length-1; ti >= 0; ti--) {
+    const t = room.turrets[ti];
+    if (t.hp <= 0) { room.turrets.splice(ti, 1); continue; }
+    let target = null, bestD = C.TURRET_RANGE * C.TURRET_RANGE;
+    for (const pl of room.players.values()) {
+      if (!pl.alive || pl.id === t.owner) continue;
+      const d2 = (pl.x-t.x)**2 + (pl.y-t.y)**2;
+      if (d2 < bestD) { bestD = d2; target = pl; }
+    }
+    if (target) {
+      t.angle = Math.atan2(target.y-t.y, target.x-t.x);
+      if (now >= (t.nextFireAt || 0)) {
+        t.nextFireAt = now + C.TURRET_FIRE_CD;
+        room.bullets.push({
+          id: room.nextBulletId++, owner: t.owner, type: 'turret', dmg: 2,
+          x: t.x + Math.cos(t.angle)*16, y: t.y + Math.sin(t.angle)*16,
+          vx: Math.cos(t.angle)*C.TURRET_BULLET_SPEED,
+          vy: Math.sin(t.angle)*C.TURRET_BULLET_SPEED,
+          life: 70,
+        });
+      }
+    }
+  }
+
   function applyDamage(victim, dmg, killerId) {
     victim.hp -= dmg;
     if (victim.hp <= 0) {
       victim.lives--;
       const killer = room.players.get(killerId);
-      if (killer && killer !== victim) killer.kills++;
+      if (killer && killer !== victim) {
+        killer.kills++;
+        // Tank class: counts kills, transforms at threshold
+        if (killer.cls === 'tank' && Date.now() >= killer.tankUntil) {
+          killer.tankKills++;
+          if (killer.tankKills >= C.TANK_KILLS_REQUIRED) {
+            killer.tankKills = 0;
+            killer.tankUntil = Date.now() + C.TANK_DURATION;
+            killer.hp = C.HP_PER_LIFE;
+            io.to(room.code).emit('tankMode', {id: killer.id, until: killer.tankUntil});
+          }
+        }
+      }
       io.to(room.code).emit('kill', {killer: killer?killer.name:'?', victim: victim.name});
       if (victim.lives <= 0) { victim.alive = false; }
-      else { const s=randomSpawn(); victim.x=s.x; victim.y=s.y; victim.hp=C.HP_PER_LIFE; }
+      else { const s=randomSpawnIn(room.walls); victim.x=s.x; victim.y=s.y; victim.hp=C.HP_PER_LIFE; }
     }
   }
 
@@ -347,23 +482,43 @@ function tick(room) {
       if (isRocket) detonated = true;
       else { room.bullets.splice(i,1); continue; }
     }
-    if (!detonated && hitsWall(b.x, b.y, r)) {
+    if (!detonated && hitsWallList(room.walls,b.x, b.y, r)) {
       if (isRocket) detonated = true;
       else { room.bullets.splice(i,1); continue; }
     }
 
     if (!detonated) {
+      let hitSomething = false;
+      // hit players
       for (const p of room.players.values()) {
         if (!p.alive || p.id===b.owner) continue;
-        if ((p.x-b.x)**2+(p.y-b.y)**2 < (C.PLAYER_R + r)**2) {
+        const pr = (Date.now() < p.tankUntil ? C.PLAYER_R + 6 : C.PLAYER_R);
+        if ((p.x-b.x)**2+(p.y-b.y)**2 < (pr + r)**2) {
           if (isRocket) { detonated = true; }
           else {
-            applyDamage(p, 1, b.owner);
+            applyDamage(p, b.dmg || 1, b.owner);
             room.bullets.splice(i,1);
+            hitSomething = true;
           }
           break;
         }
       }
+      // hit turrets (skip own)
+      if (!detonated && !hitSomething) {
+        for (const tu of room.turrets) {
+          if (tu.owner === b.owner) continue;
+          if ((tu.x-b.x)**2+(tu.y-b.y)**2 < (14 + r)**2) {
+            if (isRocket) { detonated = true; }
+            else {
+              tu.hp -= (b.dmg || 1);
+              room.bullets.splice(i,1);
+              hitSomething = true;
+            }
+            break;
+          }
+        }
+      }
+      if (hitSomething) continue;
     }
 
     if (detonated && isRocket) {
@@ -383,21 +538,28 @@ function tick(room) {
     }
   }
 
-  io.to(room.code).emit('state', {
-    t: now, endsAt: room.roundEndsAt,
-    players: [...room.players.values()].map(p => ({
-      id:p.id, name:p.name, color:p.color,
-      x:p.x, y:p.y, angle:p.angle,
-      hp:p.hp, lives:p.lives, maxHp:C.HP_PER_LIFE,
-      ammo:p.ammo, maxAmmo:C.MAG_SIZE,
-      reloading:p.reloading, reloadEndsAt:p.reloadEndsAt,
-      rockets:p.rockets,
-      alive:p.alive, kills:p.kills,
-    })),
-    bullets: room.bullets.map(b=>({x:b.x, y:b.y, type:b.type||'bullet', angle:b.angle})),
-    hearts:  room.hearts.map(h=>({x:h.x, y:h.y})),
-    rocketPickups: room.rocketPickups.map(r=>({x:r.x, y:r.y})),
-  });
+  if (room.tickCount % C.BROADCAST_EVERY === 0) {
+    io.to(room.code).emit('state', {
+      t: now, endsAt: room.roundEndsAt,
+      players: [...room.players.values()].map(p => ({
+        id:p.id, name:p.name, color:p.color, cls:p.cls,
+        x:p.x, y:p.y, angle:p.angle,
+        hp:p.hp, lives:p.lives, maxHp:C.HP_PER_LIFE,
+        ammo:p.ammo, maxAmmo:C.MAG_SIZE,
+        reloading:p.reloading, reloadEndsAt:p.reloadEndsAt,
+        rockets:p.rockets,
+        tank: now < p.tankUntil, tankUntil: p.tankUntil,
+        turretReadyAt: p.turretReadyAt,
+        petReadyAt: p.petReadyAt,
+        alive:p.alive, kills:p.kills,
+      })),
+      bullets: room.bullets.map(b=>({x:b.x, y:b.y, type:b.type||'bullet', angle:b.angle})),
+      hearts:  room.hearts.map(h=>({x:h.x, y:h.y})),
+      rocketPickups: room.rocketPickups.map(r=>({x:r.x, y:r.y})),
+      turrets: room.turrets.map(t=>({x:t.x, y:t.y, angle:t.angle||0, hp:t.hp, owner:t.owner})),
+      pets:    room.pets.map(pt=>({x:pt.x, y:pt.y, expiresAt:pt.expiresAt, owner:pt.owner})),
+    });
+  }
   checkRoundOver(room);
 }
 
@@ -415,9 +577,13 @@ const socketRoom = new Map(); // socketId -> roomCode
 io.on('connection', (socket) => {
   console.log('[+]', socket.id);
 
-  socket.on('createRoom', ({name, color}, ack) => {
+  socket.on('createRoom', ({name, color, cls, mapName, customMap}, ack) => {
     leaveCurrentRoom(socket);
-    const room = newRoom(socket.id, name, color);
+    // If host provided a custom map, save it under the chosen name
+    if (customMap && Array.isArray(customMap) && mapName) {
+      savedMaps.set(mapName, sanitizeWalls(customMap));
+    }
+    const room = newRoom(socket.id, name, color, cls, mapName);
     socketRoom.set(socket.id, room.code);
     socket.join(room.code);
     ack && ack({
@@ -425,17 +591,17 @@ io.on('connection', (socket) => {
       ownerId: socket.id, selfId: socket.id,
       room: publicRoom(room),
     });
-    console.log('[createRoom]', room.code, name);
+    console.log('[createRoom]', room.code, name, 'cls=', cls, 'map=', mapName);
   });
 
-  socket.on('joinRoom', ({roomId, name, color}, ack) => {
+  socket.on('joinRoom', ({roomId, name, color, cls}, ack) => {
     const code = String(roomId||'').trim().toUpperCase();
     const room = rooms.get(code);
     if (!room)               return ack && ack({ok:false, error:'Oda bulunamadı (kod yanlış?)'});
     if (room.players.size >= C.MAX_PLAYERS) return ack && ack({ok:false, error:'Oda dolu'});
     if (room.started)        return ack && ack({ok:false, error:'Oyun zaten başladı'});
     leaveCurrentRoom(socket);
-    addPlayer(room, socket.id, name, color);
+    addPlayer(room, socket.id, name, color, cls);
     socketRoom.set(socket.id, room.code);
     socket.join(room.code);
     ack && ack({
@@ -444,7 +610,65 @@ io.on('connection', (socket) => {
       room: publicRoom(room),
     });
     io.to(room.code).emit('roomUpdate', publicRoom(room));
-    console.log('[joinRoom]', code, name);
+    console.log('[joinRoom]', code, name, 'cls=', cls);
+  });
+
+  socket.on('changeClass', ({cls}) => {
+    const code = socketRoom.get(socket.id);
+    const room = code && rooms.get(code);
+    if (!room || room.started) return;
+    const p = room.players.get(socket.id);
+    if (p && VALID_CLASSES.includes(cls)) {
+      p.cls = cls;
+      io.to(room.code).emit('roomUpdate', publicRoom(room));
+    }
+  });
+
+  socket.on('placeTurret', () => {
+    const code = socketRoom.get(socket.id);
+    const room = code && rooms.get(code);
+    if (!room || !room.started) return;
+    const p = room.players.get(socket.id);
+    if (!p || !p.alive || p.cls !== 'engineer') return;
+    if (Date.now() < p.turretReadyAt) return;
+    if (hitsWallList(room.walls, p.x, p.y, 14)) return;
+    room.turrets.push({
+      id: room.nextTurretId++,
+      owner: p.id, x: p.x, y: p.y,
+      hp: C.TURRET_HP, angle: 0, nextFireAt: 0,
+    });
+    p.turretReadyAt = Date.now() + C.ENGINEER_TURRET_CD;
+  });
+
+  socket.on('placePet', () => {
+    const code = socketRoom.get(socket.id);
+    const room = code && rooms.get(code);
+    if (!room || !room.started) return;
+    const p = room.players.get(socket.id);
+    if (!p || !p.alive || p.cls !== 'medic') return;
+    if (Date.now() < p.petReadyAt) return;
+    room.pets.push({
+      id: room.nextPetId++,
+      owner: p.id, x: p.x, y: p.y,
+      expiresAt: Date.now() + C.PET_DURATION, lastHealAt: 0,
+    });
+    p.petReadyAt = Date.now() + C.MEDIC_PET_CD;
+  });
+
+  // Map editor: save custom map, list maps
+  socket.on('saveMap', ({name, walls}, ack) => {
+    if (!name || !Array.isArray(walls)) return ack && ack({ok:false, error:'bad input'});
+    if (name === 'default') return ack && ack({ok:false, error:'isim ayrılmış'});
+    savedMaps.set(String(name).slice(0,32), sanitizeWalls(walls));
+    ack && ack({ok:true});
+  });
+  socket.on('listMaps', (ack) => {
+    ack && ack({ok:true, names: [...savedMaps.keys()]});
+  });
+  socket.on('getMap', ({name}, ack) => {
+    const walls = savedMaps.get(name);
+    if (!walls) return ack && ack({ok:false, error:'yok'});
+    ack && ack({ok:true, walls});
   });
 
   socket.on('leaveRoom', () => leaveCurrentRoom(socket));
@@ -464,7 +688,10 @@ io.on('connection', (socket) => {
     if (!p) return;
     if (input.keys) p.keys = input.keys;
     if (typeof input.angle === 'number') p.angle = input.angle;
-    if (typeof input.mouseDown === 'boolean') p.mouseDown = input.mouseDown;
+    if (typeof input.leftDown === 'boolean') p.leftDown = input.leftDown;
+    if (typeof input.rightDown === 'boolean') p.rightDown = input.rightDown;
+    // Legacy compat
+    if (typeof input.mouseDown === 'boolean') p.leftDown = input.mouseDown;
   });
 
   socket.on('reload', () => {

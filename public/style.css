@@ -288,3 +288,52 @@ canvas { image-rendering: pixelated; display: block; }
 #netStatus { min-height: 14px; }
 .ammo.hasRocket { border-color: #ff3050; color: #ff8090; }
 .ammo.hasRocket #ammoCur { color: #ff8090; }
+
+/* CLASS PICKER */
+.class-picker {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
+  max-width: 360px;
+}
+.class-btn {
+  text-align: left; padding: 8px 10px; font-size: 9px;
+}
+.class-btn.selected { box-shadow: 4px 4px 0 #8a4a00, 0 0 0 3px #7afcff; }
+.cls-label { font-size: 11px; margin-bottom: 4px; }
+.cls-desc { font-size: 7px; color: #8a7aa6; }
+.cls-tag { font-size: 8px; margin-left: 6px; }
+
+/* MAP PICKER */
+.map-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.map-list { display: flex; gap: 4px; flex-wrap: wrap; }
+.map-btn { font-size: 9px; padding: 6px 10px; }
+.map-btn.selected { box-shadow: 4px 4px 0 #8a4a00, 0 0 0 3px #4ad2c2; }
+
+/* MAP EDITOR */
+.editor-panel { min-width: 720px; }
+#editorCanvas {
+  background: #2a3a2a; border: 3px solid #ffd24a;
+  cursor: crosshair; image-rendering: pixelated;
+  display: block; margin: 0 auto;
+}
+.editor-row {
+  display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+}
+#editorName {
+  font-family: inherit; padding: 8px;
+  background: #2a1f44; color: #ffd24a; border: 3px solid #ffd24a;
+}
+
+/* HUD: rocket badge + ability button */
+.rocket-badge {
+  position: absolute; bottom: 120px; right: 20px;
+  background: rgba(10,10,20,0.9); border: 3px solid #ff3050;
+  padding: 6px 12px; color: #ff8090; font-size: 11px;
+}
+.ability-btn {
+  position: absolute; bottom: 80px; left: 50%; transform: translateX(-220px);
+  background: #2a1f44; color: #ffd24a;
+  border: 3px solid #ffd24a; padding: 10px 14px;
+  font-family: inherit; font-size: 10px; cursor: pointer;
+  box-shadow: 4px 4px 0 #000; pointer-events: auto;
+}
+.ability-btn.ready { background: #ffd24a; color: #2a1a00; }
