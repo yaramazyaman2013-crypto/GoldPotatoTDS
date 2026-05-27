@@ -286,3 +286,5 @@ canvas { image-rendering: pixelated; display: block; }
 
 /* NET STATUS */
 #netStatus { min-height: 14px; }
+.ammo.hasRocket { border-color: #ff3050; color: #ff8090; }
+.ammo.hasRocket #ammoCur { color: #ff8090; }
