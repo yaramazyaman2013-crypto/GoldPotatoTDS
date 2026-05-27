@@ -1,3 +1,56 @@
+// ============ i18n ============
+const I18N = {
+  tr: {
+    play: 'OYNA', settings: 'AYARLAR', rooms: 'ODALAR', back: 'GERI',
+    createRoom: 'ODA OLUSTUR', roomCode: 'ODA KODU', join: 'KATIL',
+    openRooms: 'ACIK ODALAR', lobby: 'LOBI', roomCode2: 'Oda Kodu:',
+    start: 'BASLAT', waitHost: 'Oda sahibinin baslatmasini bekle',
+    leave: 'CIK', settingsTitle: 'AYARLAR', volume: 'Ses',
+    crosshair: 'Nisan', language: 'Dil', resume: 'DEVAM ET',
+    leaveGame: 'OYUNDAN CIK', escHint: 'ESC ile kapatabilirsin',
+    roundEnd: 'TUR BITTI', nextRound: 'Yeni tur birazdan...',
+    eliminated: 'ELENDIN', winner: 'KAZANAN', noWinner: 'KAZANAN YOK',
+    kills: 'kill', leaderboard: 'LIDERLIK',
+  },
+  en: {
+    play: 'PLAY', settings: 'SETTINGS', rooms: 'ROOMS', back: 'BACK',
+    createRoom: 'CREATE ROOM', roomCode: 'ROOM CODE', join: 'JOIN',
+    openRooms: 'OPEN ROOMS', lobby: 'LOBBY', roomCode2: 'Room Code:',
+    start: 'START', waitHost: 'Waiting for host to start',
+    leave: 'LEAVE', settingsTitle: 'SETTINGS', volume: 'Volume',
+    crosshair: 'Crosshair', language: 'Language', resume: 'RESUME',
+    leaveGame: 'LEAVE GAME', escHint: 'Press ESC to close',
+    roundEnd: 'ROUND OVER', nextRound: 'Next round soon...',
+    eliminated: 'ELIMINATED', winner: 'WINNER', noWinner: 'NO WINNER',
+    kills: 'kills', leaderboard: 'LEADERBOARD',
+  },
+};
+
+let currentLang = localStorage.getItem('gwLang') || 'tr';
+
+function applyLang(lang) {
+  currentLang = lang;
+  localStorage.setItem('gwLang', lang);
+  const dict = I18N[lang];
+  // text nodes
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.getAttribute('data-i18n');
+    if (dict[key] !== undefined) el.textContent = dict[key];
+  });
+  // placeholders
+  document.querySelectorAll('[data-i18n-ph]').forEach(el => {
+    const key = el.getAttribute('data-i18n-ph');
+    if (dict[key] !== undefined) el.placeholder = dict[key];
+  });
+  // active-lang buttons
+  ['btnLangTR','btnLangEN','pauseLangTR','pauseLangEN'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const isActive = (id.endsWith('TR') && lang === 'tr') || (id.endsWith('EN') && lang === 'en');
+    el.classList.toggle('active-lang', isActive);
+  });
+}
+
 // ============ AUDIO (procedural — no asset files) ============
 const AUD = {
   ctx: null, master: null, musicGain: null, sfxGain: null,
@@ -318,11 +371,23 @@ COLORS.forEach(c => {
 
 $('btnWardrobe').addEventListener('click', () => palette.classList.toggle('hidden'));
 
+// apply language on load
+applyLang(currentLang);
+
 $('btnPlay').addEventListener('click', () => { show('rooms'); refreshRooms(); });
 $('btnSettings').addEventListener('click', () => show('settings'));
-$('setVolume').addEventListener('input', (e) => AUD.setVolume(parseInt(e.target.value,10)/100));
 $('btnBack1').addEventListener('click', () => show('menu'));
 $('btnBack2').addEventListener('click', () => show('menu'));
+
+function setLang(lang) {
+  applyLang(lang);
+  // refresh dynamic strings
+  if (!$('rooms').classList.contains('hidden')) refreshRooms();
+}
+$('btnLangTR').addEventListener('click', () => setLang('tr'));
+$('btnLangEN').addEventListener('click', () => setLang('en'));
+$('pauseLangTR').addEventListener('click', () => setLang('tr'));
+$('pauseLangEN').addEventListener('click', () => setLang('en'));
 
 // ===== Rooms =====
 function refreshRooms() {
@@ -330,7 +395,8 @@ function refreshRooms() {
     const root = $('roomList');
     root.innerHTML = '';
     if (!list.length) {
-      root.innerHTML = '<div class="hint">Acik oda yok. Oda olustur.</div>';
+      const d = I18N[currentLang];
+      root.innerHTML = `<div class="hint">${d.openRooms}...</div>`;
       return;
     }
     list.forEach(r => {
@@ -338,7 +404,7 @@ function refreshRooms() {
       row.className = 'room-row';
       row.innerHTML = `<span>${r.id}</span><span>${r.count}/${r.max}</span>`;
       const b = document.createElement('button');
-      b.className = 'pixel-btn small'; b.textContent = 'KATIL';
+      b.className = 'pixel-btn small'; b.textContent = I18N[currentLang].join;
       b.onclick = () => joinRoom(r.id);
       row.appendChild(b);
       root.appendChild(row);
@@ -414,7 +480,16 @@ let mouseX = 0, mouseY = 0, mouseDown = false;
 window.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   if (k in keys) { keys[k] = true; sendInput(); }
-  if (k === 'r' && state.inGame) { socket.emit('reload'); AUD.reload(); }
+  if (k === 'r' && state.inGame) {
+    const me = state.serverState && state.serverState.players.find(p => p.id === socket.id);
+    if (me && me.alive && !me.reloading && me.ammo < (me.maxAmmo || 30)) {
+      socket.emit('reload');
+    }
+  }
+  if (e.key === 'Escape' && state.inGame) {
+    togglePause();
+    e.preventDefault();
+  }
 });
 window.addEventListener('keyup', e => {
   const k = e.key.toLowerCase();
@@ -445,6 +520,29 @@ function computeAngle() {
   const sx = me.x - camX, sy = me.y - camY;
   return Math.atan2(mouseY - sy, mouseX - sx);
 }
+
+// volume sync (both sliders stay in sync)
+function syncVolume(v) {
+  AUD.setVolume(v);
+  $('setVolume').value = Math.round(v * 100);
+  $('pauseVolume').value = Math.round(v * 100);
+}
+$('setVolume').addEventListener('input', (e) => syncVolume(parseInt(e.target.value,10)/100));
+$('pauseVolume').addEventListener('input', (e) => syncVolume(parseInt(e.target.value,10)/100));
+
+function togglePause() {
+  $('pauseMenu').classList.toggle('hidden');
+}
+$('btnResume').addEventListener('click', togglePause);
+$('btnLeaveGame').addEventListener('click', () => {
+  socket.emit('leaveRoom');
+  state.roomId = null; state.ownerId = null;
+  state.inGame = false; state.serverState = null;
+  $('pauseMenu').classList.add('hidden');
+  $('roundEnd').classList.add('hidden');
+  $('dead').classList.add('hidden');
+  show('menu');
+});
 
 setInterval(() => {
   if (!state.inGame) return;
@@ -501,7 +599,10 @@ socket.on('roundEnd', ({ board, winner }) => {
   state.inGame = false;
   const overlay = $('roundEnd');
   overlay.classList.remove('hidden');
-  $('winnerLine').textContent = winner ? `KAZANAN: ${winner.name} (${winner.kills} kill)` : 'KAZANAN YOK';
+  const d = I18N[currentLang];
+  $('winnerLine').textContent = winner
+    ? `${d.winner}: ${winner.name} (${winner.kills} ${d.kills})`
+    : d.noWinner;
   const fb = $('finalBoard');
   fb.innerHTML = '';
   board.forEach(p => {
@@ -538,7 +639,7 @@ function renderHUD() {
   // leaderboard
   const lb = $('leaderboard');
   const sorted = [...ss.players].sort((a,b)=>b.kills-a.kills);
-  let html = '<h4>LIDERLIK</h4>';
+  let html = `<h4>${I18N[currentLang].leaderboard}</h4>`;
   sorted.forEach(p => {
     html += `<div class="row" style="color:${p.alive?'#f0e8d8':'#777'}"><span>${p.name}</span><span>${p.kills}</span></div>`;
   });
