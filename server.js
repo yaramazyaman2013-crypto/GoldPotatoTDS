@@ -145,7 +145,13 @@ savedMaps.set('default', DEFAULT_WALLS);
 // and bullet propagation. Names alone are forwarded to lobbies via roomUpdate.
 
 function getMapWalls(mapName) {
-  return savedMaps.get(mapName) || DEFAULT_WALLS;
+  const walls = savedMaps.get(mapName) || DEFAULT_WALLS;
+  if (!walls.__index) {
+    Object.defineProperty(walls, '__index', {
+      value: buildWallIndex(walls), enumerable: false, configurable: true,
+    });
+  }
+  return walls;
 }
 
 function sanitizeWalls(walls) {
@@ -166,7 +172,41 @@ function circleRect(cx, cy, cr, r) {
   const dx = cx - nx, dy = cy - ny;
   return dx*dx + dy*dy < cr*cr;
 }
+// Spatial bucket index — turns O(walls) hit-tests into O(walls-in-cell).
+// Helps a lot with custom maps that have many wall rects.
+const SPATIAL_CELL = 80;
+function buildWallIndex(walls) {
+  const idx = new Map();
+  for (const w of walls) {
+    const x0 = Math.floor(w.x / SPATIAL_CELL);
+    const y0 = Math.floor(w.y / SPATIAL_CELL);
+    const x1 = Math.floor((w.x + w.w - 1) / SPATIAL_CELL);
+    const y1 = Math.floor((w.y + w.h - 1) / SPATIAL_CELL);
+    for (let cy = y0; cy <= y1; cy++)
+      for (let cx = x0; cx <= x1; cx++) {
+        const k = cx * 65536 + cy;
+        let bucket = idx.get(k);
+        if (!bucket) { bucket = []; idx.set(k, bucket); }
+        bucket.push(w);
+      }
+  }
+  return idx;
+}
+
 function hitsWallList(walls, x, y, r) {
+  // 'walls' parameter retained for back-compat; the room caches its index.
+  if (walls.__index) {
+    const idx = walls.__index;
+    const cx = Math.floor(x / SPATIAL_CELL);
+    const cy = Math.floor(y / SPATIAL_CELL);
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dx = -1; dx <= 1; dx++) {
+        const bucket = idx.get((cx+dx) * 65536 + (cy+dy));
+        if (!bucket) continue;
+        for (const w of bucket) if (circleRect(x, y, r, w)) return true;
+      }
+    return false;
+  }
   for (const w of walls) if (circleRect(x, y, r, w)) return true;
   return false;
 }
@@ -382,7 +422,7 @@ function tick(room) {
         id: room.nextBulletId++, owner: p.id, type: 'rocket',
         x: p.x+Math.cos(p.angle)*m, y: p.y+Math.sin(p.angle)*m,
         vx: Math.cos(p.angle)*C.ROCKET_SPEED, vy: Math.sin(p.angle)*C.ROCKET_SPEED,
-        angle: p.angle, life: 120,
+        angle: p.angle, life: 70,
       });
     }
     // Left click = bullet
@@ -395,7 +435,7 @@ function tick(room) {
         id: room.nextBulletId++, owner: p.id, type: 'bullet', dmg: bulletDmg,
         x: p.x+Math.cos(p.angle)*m, y: p.y+Math.sin(p.angle)*m,
         vx: Math.cos(p.angle)*C.BULLET_SPEED, vy: Math.sin(p.angle)*C.BULLET_SPEED,
-        life: 80,
+        life: 45,
       });
       if (p.ammo === 0) { p.reloading = true; p.reloadEndsAt = now + C.RELOAD_MS; }
     }
@@ -449,7 +489,7 @@ function tick(room) {
           x: t.x + Math.cos(t.angle)*16, y: t.y + Math.sin(t.angle)*16,
           vx: Math.cos(t.angle)*C.TURRET_BULLET_SPEED,
           vy: Math.sin(t.angle)*C.TURRET_BULLET_SPEED,
-          life: 70,
+          life: 40,
         });
       }
     }

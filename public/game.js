@@ -70,6 +70,11 @@ const AUD = {
   },
   resume() { if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume(); },
   setVolume(v) { this.volume = v; if (this.master) this.master.gain.value = v; },
+  muted: false,
+  setMusicMute(m) {
+    this.muted = m;
+    if (this.musicGain) this.musicGain.gain.value = m ? 0 : 0.35;
+  },
   playNote(midi, when, dur, type, dest, peakGain) {
     if (!this.ctx || !midi) return;
     const freq = 440 * Math.pow(2, (midi - 69) / 12);
@@ -515,6 +520,19 @@ function syncVolume(v) {
 $('setVolume').addEventListener('input', (e) => syncVolume(parseInt(e.target.value,10)/100));
 $('pauseVolume').addEventListener('input', (e) => syncVolume(parseInt(e.target.value,10)/100));
 
+// Music mute toggle (saved across sessions)
+function applyMute(m) {
+  AUD.setMusicMute(m);
+  localStorage.setItem('gwMute', m ? '1' : '0');
+  for (const id of ['btnMute','pauseMute']) {
+    const el = $(id);
+    if (el) el.textContent = m ? '🎵 KAPALI' : '🎵 ACIK';
+  }
+}
+applyMute(localStorage.getItem('gwMute') === '1');
+const btnMute = $('btnMute'); if (btnMute) btnMute.addEventListener('click', () => applyMute(!AUD.muted));
+const pauseMute = $('pauseMute'); if (pauseMute) pauseMute.addEventListener('click', () => applyMute(!AUD.muted));
+
 function togglePause() { $('pauseMenu').classList.toggle('hidden'); }
 $('btnResume').addEventListener('click', togglePause);
 $('btnLeaveGame').addEventListener('click', () => {
@@ -557,22 +575,14 @@ socket.on('roundStart', (data) => {
   show('game');
 });
 
-// Reset cyber anchor when this player auto-gains a rocket
-let lastRocketCount = 0;
-socket.on('state', (s) => {
-  const me = s.players.find(p => p.id === socket.id);
-  if (me && state.cls === 'cyber' && me.rockets > lastRocketCount) {
-    state.cyberAnchor = Date.now();
-  }
-  if (me) lastRocketCount = me.rockets;
-});
-
-let lastAmmo = null, wasReloading = false;
+let lastAmmo = null, wasReloading = false, lastRocketCount = 0;
 socket.on('state', (s) => {
   state.serverState = s;
   state.endsAt = s.endsAt;
   const me = s.players.find(p => p.id === socket.id);
   if (me) {
+    if (state.cls === 'cyber' && me.rockets > lastRocketCount) state.cyberAnchor = Date.now();
+    lastRocketCount = me.rockets;
     if (lastAmmo !== null && me.ammo < lastAmmo) {
       const shots = lastAmmo - me.ammo;
       for (let i = 0; i < shots; i++) AUD.shoot();
@@ -605,9 +615,14 @@ socket.on('roundEnd', ({ board, winner }) => {
 });
 
 // ===== HUD + Render =====
+let lastHUDAt = 0;
+let lastKillfeedLen = -1, lastBoardKey = '';
 function renderHUD() {
   const ss = state.serverState;
   if (!ss) return;
+  const now = Date.now();
+  if (now - lastHUDAt < 150) return; // throttle DOM updates to ~6Hz
+  lastHUDAt = now;
   const me = ss.players.find(p => p.id === socket.id);
   // timer
   const remaining = Math.max(0, state.endsAt - Date.now());
@@ -659,22 +674,28 @@ function renderHUD() {
       ab.classList.toggle('ready', ready);
     } else ab.classList.add('hidden');
   }
-  // leaderboard
-  const lb = $('leaderboard');
+  // leaderboard — only rebuild if scores changed
   const sorted = [...ss.players].sort((a,b)=>b.kills-a.kills);
-  let html = `<h4>${I18N[currentLang].leaderboard}</h4>`;
-  sorted.forEach(p => {
-    html += `<div class="row" style="color:${p.alive?'#f0e8d8':'#777'}"><span>${p.name}</span><span>${p.kills}</span></div>`;
-  });
-  lb.innerHTML = html;
-  // killfeed
-  const kf = $('killfeed');
-  kf.innerHTML = '';
-  state.killfeed.forEach(k => {
-    const d = document.createElement('div');
-    d.textContent = `${k.killer} > ${k.victim}`;
-    kf.appendChild(d);
-  });
+  const boardKey = sorted.map(p => p.id+':'+p.kills+':'+(p.alive?1:0)).join('|');
+  if (boardKey !== lastBoardKey) {
+    lastBoardKey = boardKey;
+    let html = `<h4>${I18N[currentLang].leaderboard}</h4>`;
+    sorted.forEach(p => {
+      html += `<div class="row" style="color:${p.alive?'#f0e8d8':'#777'}"><span>${p.name}</span><span>${p.kills}</span></div>`;
+    });
+    $('leaderboard').innerHTML = html;
+  }
+  // killfeed — only rebuild if list size changed
+  if (state.killfeed.length !== lastKillfeedLen) {
+    lastKillfeedLen = state.killfeed.length;
+    const kf = $('killfeed');
+    kf.innerHTML = '';
+    state.killfeed.forEach(k => {
+      const d = document.createElement('div');
+      d.textContent = `${k.killer} > ${k.victim}`;
+      kf.appendChild(d);
+    });
+  }
 }
 
 function drawRocketPickup(ctx, x, y) {
@@ -1064,13 +1085,30 @@ const EDITOR = {
 function newGrid() {
   return Array.from({length: EDITOR.gridH}, () => Array(EDITOR.gridW).fill(false));
 }
+// Greedy merge: combine adjacent filled cells into the largest possible
+// rectangles. A fully-filled 40x30 grid becomes ~1 rect instead of 1200,
+// which is huge for both server collision and client rendering.
 function gridToWalls(grid) {
-  // Each filled cell becomes a 40x40 wall
+  const W = EDITOR.gridW, H = EDITOR.gridH, CS = EDITOR.cellSize;
+  const used = grid.map(row => row.map(() => false));
   const out = [];
-  for (let y = 0; y < EDITOR.gridH; y++)
-    for (let x = 0; x < EDITOR.gridW; x++) {
-      if (grid[y][x]) out.push({x: x*EDITOR.cellSize, y: y*EDITOR.cellSize, w: EDITOR.cellSize, h: EDITOR.cellSize});
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (!grid[y][x] || used[y][x]) continue;
+      let w = 1;
+      while (x + w < W && grid[y][x+w] && !used[y][x+w]) w++;
+      let h = 1;
+      outer: while (y + h < H) {
+        for (let xx = 0; xx < w; xx++) {
+          if (!grid[y+h][x+xx] || used[y+h][x+xx]) break outer;
+        }
+        h++;
+      }
+      for (let yy = 0; yy < h; yy++)
+        for (let xx = 0; xx < w; xx++) used[y+yy][x+xx] = true;
+      out.push({x: x*CS, y: y*CS, w: w*CS, h: h*CS});
     }
+  }
   return out;
 }
 function wallsToGrid(walls) {
@@ -1133,26 +1171,37 @@ function drawEditor() {
 (function setupEditorEvents(){
   const cv = $('editorCanvas');
   if (!cv) return;
-  let dragMode = null; // true = paint, false = erase
-  function paintAt(e) {
+  let dragMode = null;
+  function cellAt(e) {
     const r = cv.getBoundingClientRect();
-    const x = Math.floor((e.clientX - r.left) / 16);
-    const y = Math.floor((e.clientY - r.top)  / 16);
-    if (x<0||y<0||x>=EDITOR.gridW||y>=EDITOR.gridH) return;
-    EDITOR.grid[y][x] = dragMode;
-    drawEditor();
+    // Use canvas internal pixel size so CSS scaling can't break clicks
+    const sx = cv.width / r.width, sy = cv.height / r.height;
+    const x = Math.floor(((e.clientX - r.left) * sx) / 16);
+    const y = Math.floor(((e.clientY - r.top)  * sy) / 16);
+    if (x<0||y<0||x>=EDITOR.gridW||y>=EDITOR.gridH) return null;
+    return {x, y};
   }
-  cv.addEventListener('mousedown', (e) => {
-    const r = cv.getBoundingClientRect();
-    const x = Math.floor((e.clientX - r.left) / 16);
-    const y = Math.floor((e.clientY - r.top)  / 16);
-    if (x<0||y<0||x>=EDITOR.gridW||y>=EDITOR.gridH) return;
-    dragMode = !EDITOR.grid[y][x];
-    EDITOR.grid[y][x] = dragMode;
+  cv.addEventListener('pointerdown', (e) => {
+    const c = cellAt(e); if (!c) return;
+    dragMode = !EDITOR.grid[c.y][c.x];
+    EDITOR.grid[c.y][c.x] = dragMode;
     drawEditor();
+    cv.setPointerCapture(e.pointerId);
+    e.preventDefault();
   });
-  cv.addEventListener('mousemove', (e) => { if (e.buttons === 1 && dragMode !== null) paintAt(e); });
-  window.addEventListener('mouseup', () => { dragMode = null; });
+  cv.addEventListener('pointermove', (e) => {
+    if (dragMode === null) return;
+    const c = cellAt(e); if (!c) return;
+    if (EDITOR.grid[c.y][c.x] !== dragMode) {
+      EDITOR.grid[c.y][c.x] = dragMode;
+      drawEditor();
+    }
+  });
+  function endDrag() { dragMode = null; }
+  cv.addEventListener('pointerup', endDrag);
+  cv.addEventListener('pointercancel', endDrag);
+  cv.addEventListener('lostpointercapture', endDrag);
+  cv.addEventListener('contextmenu', e => e.preventDefault());
 })();
 
 const btnEditMap = $('btnEditMap');
