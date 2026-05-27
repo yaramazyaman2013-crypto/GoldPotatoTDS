@@ -159,10 +159,45 @@ const AUD = {
 
 function startAudioOnGesture() {
   AUD.ensure(); AUD.resume();
-  if (!AUD.started) { AUD.started = true; AUD.startMusic(); }
+  if (!AUD.started) {
+    AUD.started = true;
+    // YouTube player handles music now; procedural is fallback only
+    if (!ytPlayer) AUD.startMusic();
+    else try { ytPlayer.playVideo(); } catch (e) {}
+  }
 }
 document.addEventListener('click', startAudioOnGesture);
 document.addEventListener('keydown', startAudioOnGesture);
+
+// ============ YouTube music ============
+let ytPlayer = null, ytReady = false;
+const YT_VIDEO_ID = 'kpnW68Q8ltc';
+window.onYouTubeIframeAPIReady = function() {
+  ytPlayer = new YT.Player('yt-music-player', {
+    height: '1', width: '1',
+    videoId: YT_VIDEO_ID,
+    playerVars: {
+      autoplay: 0, controls: 0, disablekb: 1, modestbranding: 1,
+      loop: 1, playlist: YT_VIDEO_ID, playsinline: 1,
+    },
+    events: {
+      'onReady': (e) => {
+        ytReady = true;
+        // Quiet by default (1..100 in YT API)
+        e.target.setVolume(Math.max(0, Math.min(100, Math.round(AUD.volume * 30))));
+        if (localStorage.getItem('gwMute') === '1') e.target.mute();
+        // If user already interacted with the page, try to start
+        if (AUD.started) try { e.target.playVideo(); } catch (err) {}
+      },
+      'onStateChange': (e) => {
+        // Auto-restart at end (loop reliability)
+        if (e.data === YT.PlayerState.ENDED) {
+          try { e.target.seekTo(0); e.target.playVideo(); } catch (err) {}
+        }
+      },
+    },
+  });
+};
 
 // ============ SOCKET.IO ============
 let socket;
@@ -516,6 +551,8 @@ function syncVolume(v) {
   AUD.setVolume(v);
   $('setVolume').value = Math.round(v * 100);
   $('pauseVolume').value = Math.round(v * 100);
+  // YT volume capped so background music stays gentle
+  if (ytReady && ytPlayer) try { ytPlayer.setVolume(Math.max(0, Math.min(100, Math.round(v * 30)))); } catch (e) {}
 }
 $('setVolume').addEventListener('input', (e) => syncVolume(parseInt(e.target.value,10)/100));
 $('pauseVolume').addEventListener('input', (e) => syncVolume(parseInt(e.target.value,10)/100));
@@ -523,6 +560,7 @@ $('pauseVolume').addEventListener('input', (e) => syncVolume(parseInt(e.target.v
 // Music mute toggle (saved across sessions)
 function applyMute(m) {
   AUD.setMusicMute(m);
+  if (ytReady && ytPlayer) try { m ? ytPlayer.mute() : ytPlayer.unMute(); } catch (e) {}
   localStorage.setItem('gwMute', m ? '1' : '0');
   for (const id of ['btnMute','pauseMute']) {
     const el = $(id);
@@ -560,7 +598,7 @@ setInterval(() => {
   if (!(keys.w||keys.a||keys.s||keys.d)) return;
   const now = Date.now();
   if (now - lastStepAt > 330) { AUD.step(); lastStepAt = now; }
-}, 80);
+}, 160);
 
 // ===== Socket events =====
 socket.on('roundStart', (data) => {
@@ -674,7 +712,7 @@ function renderHUD() {
       const rem = Math.max(0, 150000 - (now - (state.cyberAnchor||now)));
       label = 'FUZE ' + Math.ceil(rem/1000) + 's';
     } else if (me.cls === 'tank') {
-      label = me.tank ? 'TANK ' + Math.ceil((me.tankUntil-now)/1000) + 's' : 'KILLS ' + (me.kills||0) + '/5';
+      label = me.tank ? 'TANK ' + Math.ceil((me.tankUntil-now)/1000) + 's' : 'KILLS ' + (me.tankKills||0) + '/5';
     }
     if (label) {
       ab.textContent = label;
@@ -867,11 +905,18 @@ function render() {
   if (state.mapH < H) camY = (state.mapH - H)/2;
 
   gctx.imageSmoothingEnabled = false;
-  // Blit pre-rendered ground+walls (built once per round, rebuilt on wallBroken)
+  // Always clear first so off-map areas don't show leftover pixels (cursor trails etc.)
+  gctx.fillStyle = '#0a0a14';
+  gctx.fillRect(0, 0, W, H);
   if (groundCache) {
-    gctx.drawImage(groundCache, camX, camY, W, H, 0, 0, W, H);
-  } else {
-    gctx.fillStyle = '#4a6a3a'; gctx.fillRect(0,0,W,H);
+    // Clamp source rect to the cached image so drawImage doesn't smear edges
+    const srcX = Math.max(0, camX), srcY = Math.max(0, camY);
+    const srcW = Math.min(W, state.mapW - srcX);
+    const srcH = Math.min(H, state.mapH - srcY);
+    const dstX = srcX - camX, dstY = srcY - camY;
+    if (srcW > 0 && srcH > 0) {
+      gctx.drawImage(groundCache, srcX, srcY, srcW, srcH, dstX, dstY, srcW, srcH);
+    }
   }
 
   // hearts and rocket pickups
@@ -883,6 +928,7 @@ function render() {
   // bullets / rockets
   for (const b of ss.bullets) {
     const x=b.x-camX, y=b.y-camY;
+    if (x < -8 || y < -8 || x > W+8 || y > H+8) continue;
     if (b.type === 'rocket') drawRocket(gctx, x, y, b.angle||0);
     else {
       gctx.fillStyle='#000'; gctx.fillRect(x-3,y-3,6,6);
@@ -927,6 +973,8 @@ function render() {
   }
 
   for (const p of ss.players) {
+    const px = p.x - camX, py = p.y - camY;
+    if (px < -40 || py < -40 || px > W+40 || py > H+40) continue;
     if (p.tank) {
       const pulse = 0.6 + 0.4 * Math.sin(Date.now()/120);
       gctx.fillStyle = `rgba(255,80,90,${pulse*0.35})`;

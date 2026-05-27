@@ -633,7 +633,7 @@ function tick(room) {
         ammo:p.ammo, maxAmmo:C.MAG_SIZE,
         reloading:p.reloading, reloadEndsAt:p.reloadEndsAt,
         rockets:p.rockets,
-        tank: now < p.tankUntil, tankUntil: p.tankUntil,
+        tank: now < p.tankUntil, tankUntil: p.tankUntil, tankKills: p.tankKills,
         turretReadyAt: p.turretReadyAt,
         petReadyAt: p.petReadyAt,
         alive:p.alive, kills:p.kills,
