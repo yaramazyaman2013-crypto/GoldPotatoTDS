@@ -25,17 +25,17 @@ const C = {
   HEART_SPAWN_MS: 60 * 1000,
   MAX_HEARTS: 8,
   MAX_PLAYERS: 10,
-  PLAYER_SPEED: 3,
-  BULLET_SPEED: 9,
+  PLAYER_SPEED: 4.8,
+  BULLET_SPEED: 14,
   PLAYER_R: 14,
   BULLET_R: 3,
-  FIRE_COOLDOWN: 90,
+  FIRE_COOLDOWN: 80,
   HP_PER_LIFE: 10,
   START_LIVES: 3,
   MAX_LIVES: 5,
   MAG_SIZE: 30,
   RELOAD_MS: 1500,
-  TICK_MS: 33,
+  TICK_MS: 25,
 };
 
 // ============================================================

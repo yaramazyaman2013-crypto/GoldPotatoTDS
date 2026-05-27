@@ -495,11 +495,11 @@ $('btnLeaveGame').addEventListener('click', () => {
   show('menu');
 });
 
-// Input loop: 20 Hz
+// Input loop: ~33 Hz
 setInterval(() => {
   if (!state.inGame) return;
   socket.emit('input', { keys, angle: computeAngle(), mouseDown });
-}, 50);
+}, 30);
 
 // Footstep sounds
 let lastStepAt = 0;
