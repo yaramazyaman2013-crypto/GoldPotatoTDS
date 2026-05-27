@@ -24,6 +24,8 @@ const FIRE_COOLDOWN = 90;
 const HP_PER_LIFE = 10;
 const START_LIVES = 3;
 const MAX_LIVES = 5;
+const MAG_SIZE = 30;
+const RELOAD_MS = 1500;
 
 // American-office-style map: walls (desks/cubicles) as rectangles
 function buildWalls() {
@@ -151,6 +153,9 @@ function startRound(room) {
     p.kills = 0;
     p.angle = 0;
     p.fireCd = 0;
+    p.ammo = MAG_SIZE;
+    p.reloading = false;
+    p.reloadEndsAt = 0;
   }
   // initial hearts
   for (let i = 0; i < 4; i++) spawnHeart(room);
@@ -227,6 +232,9 @@ io.on('connection', (socket) => {
       hp: HP_PER_LIFE,
       lives: START_LIVES,
       alive: true,
+      ammo: MAG_SIZE,
+      reloading: false,
+      reloadEndsAt: 0,
       kills: 0,
       keys: { w: false, a: false, s: false, d: false },
       mouseDown: false,
@@ -272,6 +280,16 @@ io.on('connection', (socket) => {
     if (!p) return;
     p.color = color;
     io.to(room.id).emit('roomUpdate', publicRoom(room));
+  });
+
+  socket.on('reload', () => {
+    const room = rooms.get(socket.data.roomId);
+    if (!room) return;
+    const p = room.players.get(socket.id);
+    if (!p || !p.alive) return;
+    if (p.reloading || p.ammo === MAG_SIZE) return;
+    p.reloading = true;
+    p.reloadEndsAt = Date.now() + RELOAD_MS;
   });
 
   socket.on('leaveRoom', () => leave());
@@ -323,8 +341,14 @@ setInterval(() => {
         tryMove(p, dx, dy);
       }
       p.fireCd -= 33;
-      if (p.mouseDown && p.fireCd <= 0) {
+      // reload tick
+      if (p.reloading && now >= p.reloadEndsAt) {
+        p.reloading = false;
+        p.ammo = MAG_SIZE;
+      }
+      if (p.mouseDown && p.fireCd <= 0 && p.ammo > 0 && !p.reloading) {
         p.fireCd = FIRE_COOLDOWN;
+        p.ammo -= 1;
         const muzzle = 20;
         const bx = p.x + Math.cos(p.angle) * muzzle;
         const by = p.y + Math.sin(p.angle) * muzzle;
@@ -336,6 +360,10 @@ setInterval(() => {
           vy: Math.sin(p.angle) * BULLET_SPEED,
           life: 80,
         });
+        if (p.ammo === 0) {
+          p.reloading = true;
+          p.reloadEndsAt = now + RELOAD_MS;
+        }
       }
       // pick up hearts (add a life)
       for (let i = room.hearts.length - 1; i >= 0; i--) {
@@ -388,6 +416,8 @@ setInterval(() => {
         id: p.id, name: p.name, color: p.color,
         x: p.x, y: p.y, angle: p.angle,
         hp: p.hp, lives: p.lives, maxHp: HP_PER_LIFE,
+        ammo: p.ammo, maxAmmo: MAG_SIZE,
+        reloading: p.reloading, reloadEndsAt: p.reloadEndsAt,
         alive: p.alive, kills: p.kills,
       })),
       bullets: room.bullets.map(b => ({ x: b.x, y: b.y })),
