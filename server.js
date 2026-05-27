@@ -38,7 +38,7 @@ const C = {
   MAG_SIZE: 30,
   RELOAD_MS: 1500,
   TICK_MS: 25,
-  BROADCAST_EVERY: 2,        // state broadcast every N ticks (~50ms)
+  BROADCAST_EVERY: 1,        // state broadcast every tick (~25ms)
   // Rocket
   ROCKET_SPAWN_MS: 35 * 1000,
   MAX_ROCKET_PICKUPS: 3,

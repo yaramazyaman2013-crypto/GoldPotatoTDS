@@ -540,8 +540,11 @@ window.addEventListener('mouseup', e => {
 gameCanvas.addEventListener('contextmenu', e => e.preventDefault());
 
 function computeAngle() {
-  if (!state.serverState) return 0;
-  const me = state.serverState.players.find(p => p.id === socket.id);
+  // Use real server state (not interpolated) for aim so server knows
+  // accurate angle at the time of the input packet.
+  const ss = state.serverState;
+  if (!ss) return 0;
+  const me = ss.players.find(p => p.id === socket.id);
   if (!me) return 0;
   const sx = me.x - camX, sy = me.y - camY;
   return Math.atan2(mouseY - sy, mouseX - sx);
@@ -583,11 +586,11 @@ $('btnLeaveGame').addEventListener('click', () => {
   show('menu');
 });
 
-// Input loop: ~33 Hz
+// Input loop: ~50 Hz for responsive controls
 setInterval(() => {
   if (!state.inGame) return;
   socket.emit('input', { keys, angle: computeAngle(), leftDown, rightDown });
-}, 30);
+}, 20);
 
 // Footstep sounds
 let lastStepAt = 0;
@@ -622,8 +625,39 @@ socket.on('wallBroken', ({id}) => {
   }
 });
 
+// ===== Client-side interpolation buffer =====
+// We keep the last two server states + their arrival timestamps.
+// The render loop interpolates player positions between them so that
+// even at 25ms server updates, movement looks 60fps-smooth.
+const interpBuf = { prev: null, prevAt: 0, cur: null, curAt: 0 };
+
+function getInterpState() {
+  if (!interpBuf.cur) return state.serverState;
+  if (!interpBuf.prev || interpBuf.curAt <= interpBuf.prevAt) return interpBuf.cur;
+  const dt = interpBuf.curAt - interpBuf.prevAt;
+  const t = Math.min(1, (performance.now() - interpBuf.prevAt) / dt);
+  if (t >= 1) return interpBuf.cur;
+  // Build a lightweight interpolated snapshot
+  const players = interpBuf.cur.players.map(cp => {
+    const pp = interpBuf.prev.players.find(p => p.id === cp.id);
+    if (!pp || !pp.alive || !cp.alive) return cp;
+    return {
+      ...cp,
+      x: pp.x + (cp.x - pp.x) * t,
+      y: pp.y + (cp.y - pp.y) * t,
+    };
+  });
+  return { ...interpBuf.cur, players };
+}
+
 let lastAmmo = null, wasReloading = false, lastRocketCount = 0;
 socket.on('state', (s) => {
+  // Advance interpolation buffer
+  interpBuf.prev = interpBuf.cur;
+  interpBuf.prevAt = interpBuf.curAt;
+  interpBuf.cur = s;
+  interpBuf.curAt = performance.now();
+
   state.serverState = s;
   state.endsAt = s.endsAt;
   const me = s.players.find(p => p.id === socket.id);
@@ -668,7 +702,7 @@ function renderHUD() {
   const ss = state.serverState;
   if (!ss) return;
   const now = Date.now();
-  if (now - lastHUDAt < 150) return; // throttle DOM updates to ~6Hz
+  if (now - lastHUDAt < 100) return; // throttle DOM updates to ~10Hz
   lastHUDAt = now;
   const me = ss.players.find(p => p.id === socket.id);
   // timer
@@ -888,19 +922,56 @@ function rebuildGroundCache() {
   groundCache = cv;
 }
 
+// ===== Player sprite cache =====
+// Pre-render the life-pip row (most expensive player draw) onto a tiny
+// offscreen canvas once per player-lives value so the render loop just
+// calls drawImage instead of 130+ fillRect calls per player per frame.
+const pipCache = new Map(); // key = `${lives}/${maxPips}` → ImageBitmap or canvas
+const heartShape = ["01010","11111","11111","01110","00100"];
+function getPipRow(lives, maxPips) {
+  const key = `${lives}|${maxPips}`;
+  if (pipCache.has(key)) return pipCache.get(key);
+  const cell = 2, heartW = 5*cell, heartH = 5*cell, gap = 3;
+  const totalW = maxPips*heartW + (maxPips-1)*gap;
+  const cv = document.createElement('canvas');
+  cv.width = totalW; cv.height = heartH;
+  const c = cv.getContext('2d');
+  c.imageSmoothingEnabled = false;
+  for (let i = 0; i < maxPips; i++) {
+    const hx = i*(heartW+gap), filled = i < lives;
+    for (let yy = 0; yy < 5; yy++) for (let xx = 0; xx < 5; xx++) {
+      if (heartShape[yy][xx] !== '1') continue;
+      c.fillStyle = '#000'; c.fillRect(hx+xx*cell-1, yy*cell-1, cell+2, cell+2);
+    }
+    for (let yy = 0; yy < 5; yy++) for (let xx = 0; xx < 5; xx++) {
+      if (heartShape[yy][xx] !== '1') continue;
+      c.fillStyle = filled ? (yy < 2 ? '#ff6080' : '#ff3050') : '#3a1018';
+      c.fillRect(hx+xx*cell, yy*cell, cell, cell);
+    }
+  }
+  pipCache.set(key, cv);
+  return cv;
+}
+
 function render() {
   requestAnimationFrame(render);
   if (!state.inGame || !state.serverState) return;
   // Skip world render when fully occluded (pause/round-end overlay open)
   if (!$('pauseMenu').classList.contains('hidden')) return;
   if (!$('roundEnd').classList.contains('hidden')) return;
-  const ss = state.serverState;
+  // Use interpolated state for smooth visual positions
+  const ss = getInterpState();
   const me = ss.players.find(p => p.id === socket.id);
   const W = gameCanvas.width, H = gameCanvas.height;
 
+  // Camera follows our local player; use interpolated position for smooth tracking
   const cx = me ? me.x : state.mapW/2, cy = me ? me.y : state.mapH/2;
-  camX = Math.max(0, Math.min(state.mapW - W, cx - W/2));
-  camY = Math.max(0, Math.min(state.mapH - H, cy - H/2));
+  const targetCamX = Math.max(0, Math.min(state.mapW - W, cx - W/2));
+  const targetCamY = Math.max(0, Math.min(state.mapH - H, cy - H/2));
+  // Smooth camera: lerp toward target so it never jumps even if server snaps
+  const CAM_LERP = 0.18;
+  camX += (targetCamX - camX) * CAM_LERP;
+  camY += (targetCamY - camY) * CAM_LERP;
   if (state.mapW < W) camX = (state.mapW - W)/2;
   if (state.mapH < H) camY = (state.mapH - H)/2;
 
@@ -985,24 +1056,13 @@ function render() {
     gctx.fillStyle = p.id===socket.id ? '#ffd24a' : '#fff';
     gctx.font='10px "Press Start 2P",monospace'; gctx.textAlign='center';
     gctx.fillText(p.name.slice(0,8), p.x-camX, p.y-camY-20);
-    // life pips
+    // life pips — cached offscreen canvas avoids 130+ fillRect per player/frame
     const lives = typeof p.lives==='number' ? p.lives : 0;
-    const maxPips=5, heartShape=["01010","11111","11111","01110","00100"];
-    const cell=2, heartW=5*cell, heartH=5*cell, gap=3;
-    const totalW=maxPips*heartW+(maxPips-1)*gap;
-    const hStartX=Math.floor(p.x-camX-totalW/2), py2=Math.floor(p.y-camY+22);
-    for (let i=0;i<maxPips;i++) {
-      const hx=hStartX+i*(heartW+gap), filled=i<lives;
-      for (let yy=0;yy<5;yy++) for (let xx=0;xx<5;xx++) {
-        if (heartShape[yy][xx]!=='1') continue;
-        gctx.fillStyle='#000'; gctx.fillRect(hx+xx*cell-1,py2+yy*cell-1,cell+2,cell+2);
-      }
-      for (let yy=0;yy<5;yy++) for (let xx=0;xx<5;xx++) {
-        if (heartShape[yy][xx]!=='1') continue;
-        gctx.fillStyle = filled?(yy<2?'#ff6080':'#ff3050'):'#3a1018';
-        gctx.fillRect(hx+xx*cell, py2+yy*cell, cell, cell);
-      }
-    }
+    const maxPips = 5, heartW = 10, gap = 3;
+    const totalW = maxPips*heartW + (maxPips-1)*gap;
+    const pipImg = getPipRow(lives, maxPips);
+    const py2 = Math.floor(p.y-camY+22);
+    gctx.drawImage(pipImg, Math.floor(p.x-camX-totalW/2), py2);
   }
 
   // crosshair
