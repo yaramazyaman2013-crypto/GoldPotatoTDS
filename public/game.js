@@ -161,43 +161,21 @@ function startAudioOnGesture() {
   AUD.ensure(); AUD.resume();
   if (!AUD.started) {
     AUD.started = true;
-    // YouTube player handles music now; procedural is fallback only
-    if (!ytPlayer) AUD.startMusic();
-    else try { ytPlayer.playVideo(); } catch (e) {}
+    // Start HTML5 background music on first user gesture
+    if (bgMusic && !bgMusic.muted) {
+      bgMusic.play().catch(() => {}); // browsers may block autoplay — ignore
+    }
   }
 }
 document.addEventListener('click', startAudioOnGesture);
 document.addEventListener('keydown', startAudioOnGesture);
 
-// ============ YouTube music ============
-let ytPlayer = null, ytReady = false;
-const YT_VIDEO_ID = 'kpnW68Q8ltc';
-window.onYouTubeIframeAPIReady = function() {
-  ytPlayer = new YT.Player('yt-music-player', {
-    height: '1', width: '1',
-    videoId: YT_VIDEO_ID,
-    playerVars: {
-      autoplay: 0, controls: 0, disablekb: 1, modestbranding: 1,
-      loop: 1, playlist: YT_VIDEO_ID, playsinline: 1,
-    },
-    events: {
-      'onReady': (e) => {
-        ytReady = true;
-        // Quiet by default (1..100 in YT API)
-        e.target.setVolume(Math.max(0, Math.min(100, Math.round(AUD.volume * 30))));
-        if (localStorage.getItem('gwMute') === '1') e.target.mute();
-        // If user already interacted with the page, try to start
-        if (AUD.started) try { e.target.playVideo(); } catch (err) {}
-      },
-      'onStateChange': (e) => {
-        // Auto-restart at end (loop reliability)
-        if (e.data === YT.PlayerState.ENDED) {
-          try { e.target.seekTo(0); e.target.playVideo(); } catch (err) {}
-        }
-      },
-    },
-  });
-};
+// ============ HTML5 background music ============
+const bgMusic = document.getElementById('bgMusic');
+if (bgMusic) {
+  bgMusic.volume = 0.25; // gentle background level
+  if (localStorage.getItem('gwMute') === '1') bgMusic.muted = true;
+}
 
 // ============ SOCKET.IO ============
 let socket;
@@ -554,8 +532,8 @@ function syncVolume(v) {
   AUD.setVolume(v);
   $('setVolume').value = Math.round(v * 100);
   $('pauseVolume').value = Math.round(v * 100);
-  // YT volume capped so background music stays gentle
-  if (ytReady && ytPlayer) try { ytPlayer.setVolume(Math.max(0, Math.min(100, Math.round(v * 30)))); } catch (e) {}
+  // Music volume: 25% of master so it stays as background
+  if (bgMusic) bgMusic.volume = Math.max(0, Math.min(1, v * 0.25));
 }
 $('setVolume').addEventListener('input', (e) => syncVolume(parseInt(e.target.value,10)/100));
 $('pauseVolume').addEventListener('input', (e) => syncVolume(parseInt(e.target.value,10)/100));
@@ -563,7 +541,11 @@ $('pauseVolume').addEventListener('input', (e) => syncVolume(parseInt(e.target.v
 // Music mute toggle (saved across sessions)
 function applyMute(m) {
   AUD.setMusicMute(m);
-  if (ytReady && ytPlayer) try { m ? ytPlayer.mute() : ytPlayer.unMute(); } catch (e) {}
+  if (bgMusic) {
+    bgMusic.muted = m;
+    // If unmuting and we haven't started playing yet, start now
+    if (!m && AUD.started) bgMusic.play().catch(() => {});
+  }
   localStorage.setItem('gwMute', m ? '1' : '0');
   for (const id of ['btnMute','pauseMute']) {
     const el = $(id);
