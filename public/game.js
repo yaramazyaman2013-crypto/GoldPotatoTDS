@@ -1,3 +1,113 @@
+// ============ AUDIO (procedural — no asset files) ============
+const AUD = {
+  ctx: null, master: null, musicGain: null, sfxGain: null,
+  musicTimer: null, started: false, volume: 0.5,
+  ensure() {
+    if (this.ctx) return;
+    const C = window.AudioContext || window.webkitAudioContext;
+    if (!C) return;
+    this.ctx = new C();
+    this.master = this.ctx.createGain(); this.master.gain.value = this.volume;
+    this.master.connect(this.ctx.destination);
+    this.musicGain = this.ctx.createGain(); this.musicGain.gain.value = 0.35;
+    this.musicGain.connect(this.master);
+    this.sfxGain = this.ctx.createGain(); this.sfxGain.gain.value = 0.9;
+    this.sfxGain.connect(this.master);
+  },
+  resume() { if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume(); },
+  setVolume(v) { this.volume = v; if (this.master) this.master.gain.value = v; },
+  playNote(midi, when, dur, type, dest, peakGain) {
+    if (!this.ctx || !midi) return;
+    const freq = 440 * Math.pow(2, (midi - 69) / 12);
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = type; osc.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, when);
+    g.gain.exponentialRampToValueAtTime(peakGain, when + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
+    osc.connect(g); g.connect(dest);
+    osc.start(when); osc.stop(when + dur + 0.05);
+  },
+  startMusic() {
+    if (!this.ctx || this.musicTimer) return;
+    const tempo = 110;
+    const beat = 60 / tempo;
+    const lead = [60,0,64,0, 67,0,64,0, 65,0,69,0, 67,0,64,0,
+                  62,0,65,0, 69,0,65,0, 64,0,67,0, 60,0,0,0];
+    const bass = [48,0,0,0, 55,0,0,0, 53,0,0,0, 55,0,0,0,
+                  50,0,0,0, 57,0,0,0, 52,0,0,0, 48,0,0,0];
+    let step = 0;
+    const interval = (beat / 2) * 1000;
+    const tick = () => {
+      if (!this.ctx) return;
+      const t = this.ctx.currentTime + 0.02;
+      this.playNote(lead[step], t, beat * 0.4, 'square', this.musicGain, 0.18);
+      this.playNote(bass[step], t, beat * 0.6, 'triangle', this.musicGain, 0.22);
+      step = (step + 1) % lead.length;
+    };
+    tick();
+    this.musicTimer = setInterval(tick, interval);
+  },
+  shoot() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const buf = this.ctx.createBuffer(1, 3200, this.ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = (Math.random()*2-1) * Math.pow(1 - i/d.length, 2);
+    const src = this.ctx.createBufferSource(); src.buffer = buf;
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'bandpass'; filter.frequency.value = 1200; filter.Q.value = 0.8;
+    const g = this.ctx.createGain(); g.gain.value = 0.5;
+    src.connect(filter); filter.connect(g); g.connect(this.sfxGain);
+    src.start(t);
+    // low thump
+    const osc = this.ctx.createOscillator();
+    const og = this.ctx.createGain();
+    osc.type = 'square'; osc.frequency.setValueAtTime(120, t);
+    osc.frequency.exponentialRampToValueAtTime(40, t + 0.08);
+    og.gain.setValueAtTime(0.3, t);
+    og.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+    osc.connect(og); og.connect(this.sfxGain);
+    osc.start(t); osc.stop(t + 0.1);
+  },
+  reload() {
+    if (!this.ctx) return;
+    const t0 = this.ctx.currentTime;
+    const click = (when, freq) => {
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = 'square'; osc.frequency.value = freq;
+      g.gain.setValueAtTime(0.4, when);
+      g.gain.exponentialRampToValueAtTime(0.001, when + 0.06);
+      osc.connect(g); g.connect(this.sfxGain);
+      osc.start(when); osc.stop(when + 0.07);
+    };
+    click(t0, 220);
+    click(t0 + 0.5, 180);
+    click(t0 + 1.2, 260);
+  },
+  step() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const buf = this.ctx.createBuffer(1, 1100, this.ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = (Math.random()*2-1) * Math.pow(1 - i/d.length, 3);
+    const src = this.ctx.createBufferSource(); src.buffer = buf;
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'lowpass'; filter.frequency.value = 280;
+    const g = this.ctx.createGain(); g.gain.value = 0.25;
+    src.connect(filter); filter.connect(g); g.connect(this.sfxGain);
+    src.start(t);
+  },
+};
+
+function startAudioOnGesture() {
+  AUD.ensure(); AUD.resume();
+  if (!AUD.started) { AUD.started = true; AUD.startMusic(); }
+}
+document.addEventListener('click', startAudioOnGesture);
+document.addEventListener('keydown', startAudioOnGesture);
+
 // ============ CLIENT ============
 // socket may fail if opened without server — keep a safe stub so menu still works
 let socket;
@@ -210,6 +320,7 @@ $('btnWardrobe').addEventListener('click', () => palette.classList.toggle('hidde
 
 $('btnPlay').addEventListener('click', () => { show('rooms'); refreshRooms(); });
 $('btnSettings').addEventListener('click', () => show('settings'));
+$('setVolume').addEventListener('input', (e) => AUD.setVolume(parseInt(e.target.value,10)/100));
 $('btnBack1').addEventListener('click', () => show('menu'));
 $('btnBack2').addEventListener('click', () => show('menu'));
 
@@ -303,6 +414,7 @@ let mouseX = 0, mouseY = 0, mouseDown = false;
 window.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   if (k in keys) { keys[k] = true; sendInput(); }
+  if (k === 'r' && state.inGame) { socket.emit('reload'); AUD.reload(); }
 });
 window.addEventListener('keyup', e => {
   const k = e.key.toLowerCase();
@@ -340,6 +452,16 @@ setInterval(() => {
   socket.emit('input', { keys, angle, mouseDown });
 }, 50);
 
+let lastStepAt = 0;
+setInterval(() => {
+  if (!state.inGame || !state.serverState) return;
+  const me = state.serverState.players.find(p => p.id === socket.id);
+  if (!me || !me.alive) return;
+  if (!(keys.w || keys.a || keys.s || keys.d)) return;
+  const now = Date.now();
+  if (now - lastStepAt > 330) { AUD.step(); lastStepAt = now; }
+}, 80);
+
 socket.on('roundStart', (data) => {
   state.walls = data.walls;
   state.mapW = data.mapW;
@@ -347,14 +469,27 @@ socket.on('roundStart', (data) => {
   state.endsAt = data.endsAt;
   state.inGame = true;
   state.killfeed = [];
+  lastAmmo = null; wasReloading = false;
   $('dead').classList.add('hidden');
   $('roundEnd').classList.add('hidden');
   show('game');
 });
 
+let lastAmmo = null;
+let wasReloading = false;
 socket.on('state', (s) => {
   state.serverState = s;
   state.endsAt = s.endsAt;
+  const me = s.players.find(p => p.id === socket.id);
+  if (me) {
+    if (lastAmmo !== null && me.ammo < lastAmmo) {
+      const shots = lastAmmo - me.ammo;
+      for (let i = 0; i < shots; i++) AUD.shoot();
+    }
+    if (me.reloading && !wasReloading) AUD.reload();
+    lastAmmo = me.ammo;
+    wasReloading = me.reloading;
+  }
 });
 
 socket.on('kill', ({ killer, victim }) => {
@@ -393,6 +528,13 @@ function renderHUD() {
   $('hpfill').style.width = Math.min(100, (hp/maxHp*100)) + '%';
   // dead overlay
   $('dead').classList.toggle('hidden', !me || me.alive);
+  // ammo
+  const ammoEl = $('ammo');
+  if (me) {
+    $('ammoCur').textContent = me.reloading ? '...' : me.ammo;
+    ammoEl.querySelector('.max').textContent = '/' + (me.maxAmmo || 30);
+    ammoEl.classList.toggle('reloading', !!me.reloading);
+  }
   // leaderboard
   const lb = $('leaderboard');
   const sorted = [...ss.players].sort((a,b)=>b.kills-a.kills);
@@ -484,19 +626,30 @@ function render() {
     gctx.font = '10px "Press Start 2P", monospace';
     gctx.textAlign = 'center';
     gctx.fillText(p.name.slice(0,8), p.x - camX, p.y - camY - 20);
-    // life pips (hearts) — under character
+    // life pips (mini pixel hearts) under character
     const lives = typeof p.lives === 'number' ? p.lives : 0;
     const maxPips = 5;
-    const pipW = 7, pipH = 6, gap = 2;
-    const totalW = maxPips * pipW + (maxPips - 1) * gap;
-    const startX = p.x - camX - totalW / 2;
+    const heartShape = ["01010","11111","11111","01110","00100"];
+    const cell = 2;
+    const heartW = 5 * cell, heartH = 5 * cell, gap = 3;
+    const totalW = maxPips * heartW + (maxPips - 1) * gap;
+    const startX = Math.floor(p.x - camX - totalW / 2);
+    const py = Math.floor(p.y - camY + 22);
     for (let i = 0; i < maxPips; i++) {
-      const px = startX + i * (pipW + gap);
-      const py = p.y - camY + 20;
-      gctx.fillStyle = '#000';
-      gctx.fillRect(px - 1, py - 1, pipW + 2, pipH + 2);
-      gctx.fillStyle = i < lives ? '#ff3050' : '#400a14';
-      gctx.fillRect(px, py, pipW, pipH);
+      const hx = startX + i * (heartW + gap);
+      const filled = i < lives;
+      // outline
+      for (let yy = 0; yy < 5; yy++) for (let xx = 0; xx < 5; xx++) {
+        if (heartShape[yy][xx] !== '1') continue;
+        gctx.fillStyle = '#000';
+        gctx.fillRect(hx + xx*cell - 1, py + yy*cell - 1, cell + 2, cell + 2);
+      }
+      // fill
+      for (let yy = 0; yy < 5; yy++) for (let xx = 0; xx < 5; xx++) {
+        if (heartShape[yy][xx] !== '1') continue;
+        gctx.fillStyle = filled ? (yy < 2 ? '#ff6080' : '#ff3050') : '#3a1018';
+        gctx.fillRect(hx + xx*cell, py + yy*cell, cell, cell);
+      }
     }
   }
 
