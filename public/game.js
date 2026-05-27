@@ -355,13 +355,7 @@ $('btnCreateRoom').addEventListener('click', () => {
   if (connecting) return;
   setConnecting(true);
   setNetStatus(I18N[currentLang].connecting);
-  const payload = { name: state.name, color: state.color, cls: state.cls, mapName: state.mapName };
-  // Custom maps: send walls inline
-  const custom = JSON.parse(localStorage.getItem('gwCustomMaps') || '{}');
-  if (state.mapName !== 'default' && custom[state.mapName]) {
-    payload.customMap = custom[state.mapName];
-  }
-  socket.emit('createRoom', payload, (res) => {
+  socket.emit('createRoom', { name: state.name, color: state.color, cls: state.cls, mapName: state.mapName }, (res) => {
     setConnecting(false);
     setNetStatus('');
     if (res && res.ok) {
@@ -984,22 +978,31 @@ function renderClassPicker() {
 renderClassPicker();
 
 // ============================================================
-// MAP PICKER + EDITOR
+// MAP PICKER + EDITOR (server-backed: shared list for all players)
 // ============================================================
-function loadCustomMaps() {
-  try { return JSON.parse(localStorage.getItem('gwCustomMaps') || '{}'); }
-  catch(e) { return {}; }
+let serverMaps = ['default'];
+
+function refreshMapsFromServer() {
+  socket.emit('listMaps', (res) => {
+    if (res && res.ok) {
+      serverMaps = res.names;
+      if (!serverMaps.includes(state.mapName)) state.mapName = 'default';
+      renderMapList();
+    }
+  });
 }
-function saveCustomMaps(maps) {
-  localStorage.setItem('gwCustomMaps', JSON.stringify(maps));
-}
+socket.on('mapsUpdated', ({names}) => {
+  serverMaps = names;
+  renderMapList();
+});
+// fetch initial list once connected
+socket.on('connect', refreshMapsFromServer);
 
 function renderMapList() {
   const root = $('mapList');
   if (!root) return;
   root.innerHTML = '';
-  const maps = ['default', ...Object.keys(loadCustomMaps())];
-  maps.forEach(name => {
+  serverMaps.forEach(name => {
     const b = document.createElement('button');
     b.className = 'pixel-btn small map-btn';
     b.textContent = name;
@@ -1044,18 +1047,24 @@ function wallsToGrid(walls) {
 
 function openEditor(name) {
   EDITOR.active = true;
-  if (name && loadCustomMaps()[name]) {
-    EDITOR.grid = wallsToGrid(loadCustomMaps()[name]);
-    $('editorName').value = name;
-  } else {
+  function withBlank() {
     EDITOR.grid = newGrid();
-    // bordering walls preset
     for (let x = 0; x < EDITOR.gridW; x++) { EDITOR.grid[0][x] = true; EDITOR.grid[EDITOR.gridH-1][x] = true; }
     for (let y = 0; y < EDITOR.gridH; y++) { EDITOR.grid[y][0] = true; EDITOR.grid[y][EDITOR.gridW-1] = true; }
     $('editorName').value = name || 'map' + Math.floor(Math.random()*100);
+    show('editor'); drawEditor();
   }
-  show('editor');
-  drawEditor();
+  if (name && name !== 'default' && serverMaps.includes(name)) {
+    socket.emit('getMap', {name}, (res) => {
+      if (res && res.ok) {
+        EDITOR.grid = wallsToGrid(res.walls);
+        $('editorName').value = name;
+        show('editor'); drawEditor();
+      } else withBlank();
+    });
+  } else {
+    withBlank();
+  }
 }
 
 function drawEditor() {
@@ -1115,12 +1124,15 @@ if (btnSaveMap) btnSaveMap.addEventListener('click', () => {
   const name = ($('editorName').value || '').trim().slice(0, 24);
   if (!name || name === 'default') return alert('Geçerli bir isim gir');
   const walls = gridToWalls(EDITOR.grid);
-  const maps = loadCustomMaps();
-  maps[name] = walls;
-  saveCustomMaps(maps);
-  state.mapName = name;
-  renderMapList();
-  show('rooms');
+  socket.emit('saveMap', {name, walls}, (res) => {
+    if (res && res.ok) {
+      state.mapName = name;
+      refreshMapsFromServer();
+      show('rooms');
+    } else {
+      alert((res && res.error) || 'Kaydedilemedi');
+    }
+  });
 });
 const btnCancelEditor = $('btnCancelEditor');
 if (btnCancelEditor) btnCancelEditor.addEventListener('click', () => show('rooms'));
@@ -1128,12 +1140,11 @@ const btnDeleteMap = $('btnDeleteMap');
 if (btnDeleteMap) btnDeleteMap.addEventListener('click', () => {
   const name = ($('editorName').value || '').trim();
   if (!name || name === 'default') return;
-  const maps = loadCustomMaps();
-  delete maps[name];
-  saveCustomMaps(maps);
-  if (state.mapName === name) state.mapName = 'default';
-  renderMapList();
-  show('rooms');
+  socket.emit('deleteMap', {name}, () => {
+    if (state.mapName === name) state.mapName = 'default';
+    refreshMapsFromServer();
+    show('rooms');
+  });
 });
 
 renderMapList();

@@ -6,6 +6,7 @@ const express = require('express');
 const http    = require('http');
 const { Server } = require('socket.io');
 const path    = require('path');
+const fs      = require('fs');
 
 const app    = express();
 const server = http.createServer(app);
@@ -133,8 +134,37 @@ const DEFAULT_WALLS = buildWalls();
 
 // Custom maps shared between clients (in-memory; the room host can save+share).
 // Map: name -> walls array
+// Persisted to disk so every player sees the same map list, and maps survive restart.
+// On Railway, attach a Volume mounted at /data to keep maps across deploys.
+const MAPS_FILE = process.env.MAPS_FILE || path.join(process.env.DATA_DIR || __dirname, 'maps.json');
 const savedMaps = new Map();
 savedMaps.set('default', DEFAULT_WALLS);
+
+function loadMapsFromDisk() {
+  try {
+    if (!fs.existsSync(MAPS_FILE)) return;
+    const obj = JSON.parse(fs.readFileSync(MAPS_FILE, 'utf8'));
+    for (const [name, walls] of Object.entries(obj)) {
+      if (name === 'default') continue;
+      if (Array.isArray(walls)) savedMaps.set(name, sanitizeWalls(walls));
+    }
+    console.log('[maps] loaded', savedMaps.size - 1, 'custom maps from', MAPS_FILE);
+  } catch (e) {
+    console.warn('[maps] load failed:', e.message);
+  }
+}
+function persistMaps() {
+  try {
+    const obj = {};
+    for (const [name, walls] of savedMaps) {
+      if (name === 'default') continue;
+      obj[name] = walls;
+    }
+    fs.writeFileSync(MAPS_FILE, JSON.stringify(obj));
+  } catch (e) {
+    console.warn('[maps] save failed:', e.message);
+  }
+}
 
 function getMapWalls(mapName) {
   return savedMaps.get(mapName) || DEFAULT_WALLS;
@@ -577,12 +607,8 @@ const socketRoom = new Map(); // socketId -> roomCode
 io.on('connection', (socket) => {
   console.log('[+]', socket.id);
 
-  socket.on('createRoom', ({name, color, cls, mapName, customMap}, ack) => {
+  socket.on('createRoom', ({name, color, cls, mapName}, ack) => {
     leaveCurrentRoom(socket);
-    // If host provided a custom map, save it under the chosen name
-    if (customMap && Array.isArray(customMap) && mapName) {
-      savedMaps.set(mapName, sanitizeWalls(customMap));
-    }
     const room = newRoom(socket.id, name, color, cls, mapName);
     socketRoom.set(socket.id, room.code);
     socket.join(room.code);
@@ -655,11 +681,22 @@ io.on('connection', (socket) => {
     p.petReadyAt = Date.now() + C.MEDIC_PET_CD;
   });
 
-  // Map editor: save custom map, list maps
+  // Map editor: save custom map, list maps, delete
   socket.on('saveMap', ({name, walls}, ack) => {
     if (!name || !Array.isArray(walls)) return ack && ack({ok:false, error:'bad input'});
-    if (name === 'default') return ack && ack({ok:false, error:'isim ayrılmış'});
-    savedMaps.set(String(name).slice(0,32), sanitizeWalls(walls));
+    const safeName = String(name).slice(0,32).trim();
+    if (!safeName || safeName === 'default') return ack && ack({ok:false, error:'isim ayrılmış'});
+    savedMaps.set(safeName, sanitizeWalls(walls));
+    persistMaps();
+    ack && ack({ok:true});
+    io.emit('mapsUpdated', { names: [...savedMaps.keys()] });
+  });
+  socket.on('deleteMap', ({name}, ack) => {
+    if (!name || name === 'default') return ack && ack({ok:false, error:'silinmez'});
+    if (savedMaps.delete(name)) {
+      persistMaps();
+      io.emit('mapsUpdated', { names: [...savedMaps.keys()] });
+    }
     ack && ack({ok:true});
   });
   socket.on('listMaps', (ack) => {
@@ -748,5 +785,6 @@ function leaveCurrentRoom(socket) {
 // ============================================================
 // START
 // ============================================================
+loadMapsFromDisk();
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log('Gold Wave server on port ' + PORT));
