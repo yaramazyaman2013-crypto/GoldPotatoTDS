@@ -172,6 +172,23 @@ function makeRoomCode() {
   return s;
 }
 
+// PeerJS broker config. Explicit so both host and joiner hit the
+// exact same broker (avoids cross-shard "unknown peer" issues).
+const PEER_CONFIG = {
+  host: '0.peerjs.com',
+  port: 443,
+  path: '/',
+  secure: true,
+  debug: 2,
+  config: {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:global.stun.twilio.com:3478' },
+    ],
+  },
+};
+const PEER_PREFIX = 'goldwave';
+
 const Net = {
   id: null,
   mode: null,        // 'host' | 'joiner'
@@ -244,17 +261,28 @@ const Net = {
     const code = makeRoomCode();
     this.mode = 'host';
     this.roomCode = code;
-    setNetStatus('Sunucuya bağlanılıyor (peerjs)...');
-    this.peer = new Peer('gwtds-' + code, { debug: 1 });
+    const fullId = PEER_PREFIX + code;
+    setNetStatus('PeerJS sunucusuna baglaniliyor...');
+    console.log('[Net] createRoom: peer id =', fullId);
+    this.peer = new Peer(fullId, PEER_CONFIG);
     let acked = false;
+    const failTimer = setTimeout(() => {
+      if (!acked) {
+        acked = true;
+        ack && ack({ ok: false, error: 'PeerJS sunucusuna 12sn icinde baglanamadi. Internet/firewall kontrol et.' });
+        this._leaveRoom();
+      }
+    }, 12000);
     this.peer.on('open', (id) => {
+      clearTimeout(failTimer);
+      console.log('[Net] host opened, id =', id);
       this.id = id;
       this.ownerId = id;
       this.hostGame = new HostGame(this._hostCallbacks());
       this.hostGame.start();
       this.hostGame.addPlayer(id, name, color);
       acked = true;
-      setNetStatus('');
+      setNetStatus('Oda hazir: ' + code);
       ack && ack({
         ok: true,
         roomId: code,
@@ -262,13 +290,21 @@ const Net = {
         room: this.hostGame.publicRoom(code, id),
       });
     });
+    this.peer.on('disconnected', () => {
+      console.warn('[Net] host disconnected from broker, retrying...');
+      setNetStatus('Aglara baglanti koptu, tekrar baglaniyor...');
+      try { this.peer.reconnect(); } catch (e) {}
+    });
     this.peer.on('error', (e) => {
-      console.warn('Peer error', e);
+      console.warn('[Net] peer error', e.type, e.message);
       if (!acked) {
+        clearTimeout(failTimer);
         acked = true;
-        let msg = 'Bağlanılamadı: ' + (e.type || 'unknown');
-        if (e.type === 'unavailable-id') msg = 'Oda kodu meşgul, tekrar dene';
-        if (e.type === 'network' || e.type === 'server-error') msg = 'PeerJS sunucusuna erişilemiyor';
+        let msg = 'Hata (' + (e.type || 'unknown') + ')';
+        if (e.type === 'unavailable-id') msg = 'Oda kodu mesgul, tekrar dene';
+        else if (e.type === 'network' || e.type === 'server-error') msg = 'PeerJS sunucusuna erisilemiyor (internet/firewall?)';
+        else if (e.type === 'browser-incompatible') msg = 'Tarayicin WebRTC destekemiyor';
+        else if (e.type === 'ssl-unavailable') msg = 'SSL hatasi. Sayfayi HTTPS uzerinden ac.';
         ack && ack({ ok: false, error: msg });
         this._leaveRoom();
       }
@@ -331,27 +367,33 @@ const Net = {
       return;
     }
     this.mode = 'joiner';
-    this.roomCode = String(roomId || '').toUpperCase();
-    setNetStatus('Bağlanılıyor...');
-    this.peer = new Peer(undefined, { debug: 1 });
+    this.roomCode = String(roomId || '').trim().toUpperCase();
+    const targetId = PEER_PREFIX + this.roomCode;
+    setNetStatus('PeerJS sunucusuna baglaniliyor...');
+    console.log('[Net] joinRoom: target peer id =', targetId);
+    this.peer = new Peer(undefined, PEER_CONFIG);
     let acked = false;
+    const overallTimer = setTimeout(() => {
+      if (!acked) {
+        acked = true;
+        ack && ack({ ok: false, error: 'Zaman asimi: 15sn icinde baglanilamadi' });
+        this._leaveRoom();
+      }
+    }, 15000);
     this.peer.on('open', (id) => {
+      console.log('[Net] joiner peer opened, id =', id);
       this.id = id;
-      const conn = this.peer.connect('gwtds-' + this.roomCode, { reliable: true });
+      setNetStatus('Host araniyor...');
+      const conn = this.peer.connect(targetId, { reliable: true });
       this.hostConn = conn;
-      let openTimer = setTimeout(() => {
-        if (!acked) {
-          acked = true;
-          ack && ack({ ok: false, error: 'Oda bulunamadı veya host yanıt vermiyor' });
-          this._leaveRoom();
-        }
-      }, 8000);
       conn.on('open', () => {
+        console.log('[Net] data channel open');
+        setNetStatus('Bilgi gonderiliyor...');
         conn.send({ kind: 'joinPlayer', name, color });
       });
       conn.on('data', (msg) => {
         if (msg.kind === 'joinedOk') {
-          clearTimeout(openTimer);
+          clearTimeout(overallTimer);
           if (acked) { this._trigger('roomUpdate', msg.payload.room); return; }
           acked = true;
           this.ownerId = msg.payload.ownerId;
@@ -363,7 +405,7 @@ const Net = {
             room: msg.payload.room,
           });
         } else if (msg.kind === 'joinedErr') {
-          clearTimeout(openTimer);
+          clearTimeout(overallTimer);
           if (acked) return;
           acked = true;
           ack && ack({ ok: false, error: msg.payload.error });
@@ -373,21 +415,33 @@ const Net = {
         }
       });
       conn.on('close', () => {
-        clearTimeout(openTimer);
-        if (!acked) { acked = true; ack && ack({ ok: false, error: 'Bağlantı kapatıldı' }); }
+        console.warn('[Net] conn closed');
+        if (!acked) {
+          clearTimeout(overallTimer);
+          acked = true;
+          ack && ack({ ok: false, error: 'Baglanti kapandi (host kapatti?)' });
+        }
         this._trigger('hostDisconnected', null);
       });
       conn.on('error', (e) => {
-        clearTimeout(openTimer);
-        if (!acked) { acked = true; ack && ack({ ok: false, error: 'Bağlantı hatası' }); }
+        console.warn('[Net] conn error', e);
+        if (!acked) {
+          clearTimeout(overallTimer);
+          acked = true;
+          ack && ack({ ok: false, error: 'Baglanti hatasi: ' + (e.type || e.message || 'unknown') });
+        }
       });
     });
     this.peer.on('error', (e) => {
+      console.warn('[Net] joiner peer error', e.type, e.message);
       if (acked) return;
+      clearTimeout(overallTimer);
       acked = true;
-      let msg = 'Bağlanılamadı: ' + (e.type || 'unknown');
-      if (e.type === 'peer-unavailable') msg = 'Oda bulunamadı';
-      if (e.type === 'network' || e.type === 'server-error') msg = 'PeerJS sunucusuna erişilemiyor';
+      let msg = 'Hata (' + (e.type || 'unknown') + ')';
+      if (e.type === 'peer-unavailable') msg = 'Oda bulunamadi (kod yanlis veya host henuz hazir degil, 5sn bekleyip tekrar dene)';
+      else if (e.type === 'network' || e.type === 'server-error') msg = 'PeerJS sunucusuna erisilemiyor (internet/firewall?)';
+      else if (e.type === 'browser-incompatible') msg = 'Tarayicin WebRTC desteklemiyor';
+      else if (e.type === 'ssl-unavailable') msg = 'SSL hatasi. Sayfayi HTTPS uzerinden ac.';
       ack && ack({ ok: false, error: msg });
       this._leaveRoom();
     });
@@ -699,6 +753,10 @@ function enterLobby(roomId, ownerId) {
   state.roomId = roomId; state.ownerId = ownerId;
   state.selfId = socket.id;
   $('lobbyCode').textContent = roomId;
+  const isHost = Net.mode === 'host';
+  $('lobbyStatus').textContent = isHost
+    ? 'Oda aktif. Kodu arkadasina ver, sonra BASLAT.'
+    : 'Lobiye baglandin. Host baslatmasini bekle.';
   show('lobby');
 }
 $('btnLeave').addEventListener('click', () => {
