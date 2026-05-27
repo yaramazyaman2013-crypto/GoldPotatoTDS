@@ -258,6 +258,7 @@ const Net = {
       ack && ack({ ok: false, error: 'PeerJS yuklenemedi (internet yok?)' });
       return;
     }
+    if (this.peer || this.mode) this._leaveRoom();
     const code = makeRoomCode();
     this.mode = 'host';
     this.roomCode = code;
@@ -366,6 +367,8 @@ const Net = {
       ack && ack({ ok: false, error: 'PeerJS yuklenemedi (internet yok?)' });
       return;
     }
+    // Force clean state — prevent multiple peers stacking on rapid clicks
+    if (this.peer || this.mode) this._leaveRoom();
     this.mode = 'joiner';
     this.roomCode = String(roomId || '').trim().toUpperCase();
     const targetId = PEER_PREFIX + this.roomCode;
@@ -373,6 +376,7 @@ const Net = {
     console.log('[Net] joinRoom: target peer id =', targetId);
     this.peer = new Peer(undefined, PEER_CONFIG);
     let acked = false;
+    let openedAt = 0;
     const overallTimer = setTimeout(() => {
       if (!acked) {
         acked = true;
@@ -387,6 +391,7 @@ const Net = {
       const conn = this.peer.connect(targetId, { reliable: true });
       this.hostConn = conn;
       conn.on('open', () => {
+        openedAt = Date.now();
         console.log('[Net] data channel open');
         setNetStatus('Bilgi gonderiliyor...');
         conn.send({ kind: 'joinPlayer', name, color });
@@ -415,11 +420,15 @@ const Net = {
         }
       });
       conn.on('close', () => {
-        console.warn('[Net] conn closed');
+        console.warn('[Net] conn closed at', Date.now(), 'opened-since:', openedAt ? Date.now()-openedAt : 'never');
         if (!acked) {
           clearTimeout(overallTimer);
           acked = true;
-          ack && ack({ ok: false, error: 'Baglanti kapandi (host kapatti?)' });
+          if (openedAt && Date.now() - openedAt < 3000) {
+            ack && ack({ ok: false, error: 'Oda hayalet: PeerJS broker\'da kayit var ama gercek host yanit vermiyor. Host tarayicisi acik mi? Kodu host yeniden olusturup verdi mi? (Eski kodlar 1-2 dk sonra dusuyor.)' });
+          } else {
+            ack && ack({ ok: false, error: 'Baglanti kapandi' });
+          }
         }
         this._trigger('hostDisconnected', null);
       });
@@ -716,18 +725,30 @@ $('pauseLangTR').addEventListener('click', () => setLang('tr'));
 $('pauseLangEN').addEventListener('click', () => setLang('en'));
 
 // ===== Rooms =====
+let connecting = false;
+function setConnecting(v) {
+  connecting = v;
+  $('btnCreateRoom').disabled = v;
+  $('btnJoinCode').disabled = v;
+}
 $('btnCreateRoom').addEventListener('click', () => {
+  if (connecting) return;
+  setConnecting(true);
   socket.emit('createRoom', { name: state.name, color: state.color }, (res) => {
+    setConnecting(false);
     if (res.ok) { enterLobby(res.roomId, res.ownerId); if (res.room) renderLobby(res.room); }
     else alert(res.error || 'Bağlanılamadı');
   });
 });
 $('btnJoinCode').addEventListener('click', () => {
+  if (connecting) return;
   const code = $('joinCode').value.trim().toUpperCase();
   if (code) joinRoom(code);
 });
 function joinRoom(code) {
+  setConnecting(true);
   socket.emit('joinRoom', { roomId: code, name: state.name, color: state.color }, (res) => {
+    setConnecting(false);
     if (res.ok) { enterLobby(res.roomId, res.ownerId); if (res.room) renderLobby(res.room); }
     else alert(res.error);
   });
