@@ -121,27 +121,38 @@ function drawRobotTopDown(ctx, x, y, color, angle, alive=true) {
   ctx.restore();
 }
 
-// shirt icon
+// shirt icon — clearer t-shirt silhouette
 function drawShirt(ctx) {
   ctx.clearRect(0,0,40,40);
   ctx.imageSmoothingEnabled = false;
+  // 1 = outline, 2 = fabric, 3 = collar shade
   const map = [
-    "0001111110000",
-    "0011222211000",
-    "0112222222100",
-    "1122222222210",
-    "1112222222110",
-    "0012222222100",
-    "0012222222100",
-    "0012222222100",
-    "0011111111100",
+    "01100011000110",
+    "11110111101111",
+    "12221333312221",
+    "12222311132221",
+    "01222222222210",
+    "00122222222100",
+    "00122222222100",
+    "00122222222100",
+    "00122222222100",
+    "00122222222100",
+    "00111111111100",
   ];
-  const s = 3;
-  for (let y=0;y<map.length;y++) for (let x=0;x<map[0].length;x++) {
-    const c = map[y][x];
-    if (c==='0') continue;
-    ctx.fillStyle = c==='1' ? '#0a0a0a' : '#ffd24a';
-    ctx.fillRect(x*s+2, y*s+4, s, s);
+  const s = 2;
+  const ox = Math.floor((40 - map[0].length * s) / 2);
+  const oy = Math.floor((40 - map.length * s) / 2);
+  for (let y=0;y<map.length;y++) {
+    for (let x=0;x<map[y].length;x++) {
+      const c = map[y][x];
+      if (c==='0') continue;
+      let col;
+      if (c==='1') col = '#0a0a0a';
+      else if (c==='2') col = '#ffd24a';
+      else col = '#caa030';
+      ctx.fillStyle = col;
+      ctx.fillRect(ox + x*s, oy + y*s, s, s);
+    }
   }
 }
 
@@ -225,7 +236,7 @@ function refreshRooms() {
 }
 $('btnCreateRoom').addEventListener('click', () => {
   socket.emit('createRoom', { name: state.name, color: state.color }, (res) => {
-    if (res.ok) enterLobby(res.roomId, res.ownerId);
+    if (res.ok) { enterLobby(res.roomId, res.ownerId); if (res.room) renderLobby(res.room); }
   });
 });
 $('btnJoinCode').addEventListener('click', () => {
@@ -234,9 +245,25 @@ $('btnJoinCode').addEventListener('click', () => {
 });
 function joinRoom(code) {
   socket.emit('joinRoom', { roomId: code, name: state.name, color: state.color }, (res) => {
-    if (res.ok) enterLobby(res.roomId, res.ownerId);
+    if (res.ok) { enterLobby(res.roomId, res.ownerId); if (res.room) renderLobby(res.room); }
     else alert(res.error);
   });
+}
+
+function renderLobby(room) {
+  state.ownerId = room.ownerId;
+  state.selfId = socket.id;
+  const root = $('lobbyPlayers');
+  root.innerHTML = '';
+  room.players.forEach(p => {
+    const chip = document.createElement('div');
+    chip.className = 'player-chip';
+    chip.innerHTML = `<span class="swatch" style="background:${p.color}"></span><span>${p.name}${p.id===room.ownerId?' (host)':''}</span>`;
+    root.appendChild(chip);
+  });
+  const isHost = room.ownerId === socket.id;
+  $('btnStart').classList.toggle('hidden', !isHost);
+  $('waitMsg').classList.toggle('hidden', isHost);
 }
 
 setInterval(() => { if (!$('rooms').classList.contains('hidden')) refreshRooms(); }, 3000);
@@ -256,19 +283,7 @@ $('btnStart').addEventListener('click', () => socket.emit('startGame'));
 
 socket.on('roomUpdate', (room) => {
   if (!state.roomId || room.id !== state.roomId) return;
-  state.ownerId = room.ownerId;
-  state.selfId = socket.id;
-  const root = $('lobbyPlayers');
-  root.innerHTML = '';
-  room.players.forEach(p => {
-    const chip = document.createElement('div');
-    chip.className = 'player-chip';
-    chip.innerHTML = `<span class="swatch" style="background:${p.color}"></span><span>${p.name}${p.id===room.ownerId?' (host)':''}</span>`;
-    root.appendChild(chip);
-  });
-  const isHost = room.ownerId === socket.id;
-  $('btnStart').classList.toggle('hidden', !isHost);
-  $('waitMsg').classList.toggle('hidden', isHost);
+  renderLobby(room);
 });
 
 // ===== Game =====
@@ -372,9 +387,10 @@ function renderHUD() {
   const mm = Math.floor(remaining/60000);
   const sec = Math.floor((remaining%60000)/1000);
   $('timer').textContent = String(mm).padStart(2,'0') + ':' + String(sec).padStart(2,'0');
-  // hp bar
-  const hp = me ? Math.max(0,me.hp) : 0;
-  $('hpfill').style.width = (hp/3*100) + '%';
+  // hp bar (current life HP, 0..maxHp)
+  const hp = me ? Math.max(0, me.hp) : 0;
+  const maxHp = me && me.maxHp ? me.maxHp : 10;
+  $('hpfill').style.width = Math.min(100, (hp/maxHp*100)) + '%';
   // dead overlay
   $('dead').classList.toggle('hidden', !me || me.alive);
   // leaderboard
@@ -468,10 +484,19 @@ function render() {
     gctx.font = '10px "Press Start 2P", monospace';
     gctx.textAlign = 'center';
     gctx.fillText(p.name.slice(0,8), p.x - camX, p.y - camY - 20);
-    // hp pips
-    for (let i = 0; i < 3; i++) {
-      gctx.fillStyle = i < p.hp ? '#ff3050' : '#330000';
-      gctx.fillRect(p.x - camX - 12 + i*9, p.y - camY + 18, 6, 6);
+    // life pips (hearts) — under character
+    const lives = typeof p.lives === 'number' ? p.lives : 0;
+    const maxPips = 5;
+    const pipW = 7, pipH = 6, gap = 2;
+    const totalW = maxPips * pipW + (maxPips - 1) * gap;
+    const startX = p.x - camX - totalW / 2;
+    for (let i = 0; i < maxPips; i++) {
+      const px = startX + i * (pipW + gap);
+      const py = p.y - camY + 20;
+      gctx.fillStyle = '#000';
+      gctx.fillRect(px - 1, py - 1, pipW + 2, pipH + 2);
+      gctx.fillStyle = i < lives ? '#ff3050' : '#400a14';
+      gctx.fillRect(px, py, pipW, pipH);
     }
   }
 
