@@ -12,6 +12,10 @@
     <h1 class="title">GOLD<span>WAVE</span></h1>
     <button id="btnPlay" class="pixel-btn" data-i18n="play">PLAY</button>
     <button id="btnSettings" class="pixel-btn" data-i18n="settings">AYARLAR</button>
+    <div class="menu-map-wrap">
+      <div class="menu-map-label">MAP PREVIEW</div>
+      <canvas id="menuMinimap" width="400" height="300"></canvas>
+    </div>
   </div>
   <div class="menu-top-right">
     <input id="nameInput" maxlength="16" />
@@ -75,7 +79,6 @@
     <div id="timer" class="timer">10:00</div>
     <div id="hpbar" class="hpbar"><div id="hpfill"></div></div>
     <div id="ammo" class="ammo"><span id="ammoCur">30</span><span class="max">/30</span></div>
-    <canvas id="minimap" class="minimap" width="280" height="210"></canvas>
     <div id="killfeed" class="killfeed"></div>
   </div>
   <div id="roundEnd" class="screen hidden overlay">

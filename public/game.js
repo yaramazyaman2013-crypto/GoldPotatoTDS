@@ -765,48 +765,81 @@ function render() {
   gctx.stroke();
 
   renderHUD();
-  renderMinimap();
 }
 requestAnimationFrame(render);
 
-const minimap = $('minimap');
-const mmctx = minimap.getContext('2d');
-function renderMinimap() {
-  const ss = state.serverState;
-  if (!ss) return;
-  const MW = minimap.width, MH = minimap.height;
-  const sx = MW / state.mapW, sy = MH / state.mapH;
-  mmctx.imageSmoothingEnabled = false;
-  // floor
-  mmctx.fillStyle = '#1a2226';
-  mmctx.fillRect(0, 0, MW, MH);
-  // walls
-  mmctx.fillStyle = '#7a5a2a';
-  for (const w of state.walls) {
-    mmctx.fillRect(Math.floor(w.x*sx), Math.floor(w.y*sy),
-      Math.max(1, Math.ceil(w.w*sx)), Math.max(1, Math.ceil(w.h*sy)));
-  }
-  // hearts
-  for (const h of ss.hearts) {
-    mmctx.fillStyle = '#ff3050';
-    mmctx.fillRect(Math.floor(h.x*sx)-1, Math.floor(h.y*sy)-1, 3, 3);
-  }
-  // players
-  for (const p of ss.players) {
-    if (!p.alive) continue;
-    const px = Math.floor(p.x*sx), py = Math.floor(p.y*sy);
-    mmctx.fillStyle = '#000';
-    mmctx.fillRect(px-3, py-3, 6, 6);
-    mmctx.fillStyle = p.id === socket.id ? '#ffd24a' : (p.color || '#fff');
-    mmctx.fillRect(px-2, py-2, 4, 4);
-  }
-  // viewport rectangle (what the player currently sees)
-  const W = gameCanvas.width, H = gameCanvas.height;
-  mmctx.strokeStyle = 'rgba(255, 210, 74, 0.7)';
-  mmctx.lineWidth = 1;
-  mmctx.strokeRect(Math.floor(camX*sx), Math.floor(camY*sy),
-    Math.ceil(W*sx), Math.ceil(H*sy));
+// ===== MENU MAP PREVIEW =====
+const menuMM = $('menuMinimap');
+const menuMMctx = menuMM.getContext('2d');
+const MM_W = 400, MM_H = 300;
+const MM_MAP_W = 1600, MM_MAP_H = 1200;
+const mmSx = MM_W / MM_MAP_W, mmSy = MM_H / MM_MAP_H;
+
+function buildMenuWalls() {
+  const w = [];
+  w.push({x:0,y:0,w:MM_MAP_W,h:20}); w.push({x:0,y:MM_MAP_H-20,w:MM_MAP_W,h:20});
+  w.push({x:0,y:0,w:20,h:MM_MAP_H}); w.push({x:MM_MAP_W-20,y:0,w:20,h:MM_MAP_H});
+  const blocks = [
+    [120,120,220,20],[120,120,20,100],[320,120,20,100],
+    [400,120,220,20],[400,120,20,100],[600,120,20,100],
+    [680,120,220,20],[680,120,20,100],[880,120,20,100],
+    [960,120,220,20],[960,120,20,100],[1160,120,20,100],
+    [1240,120,220,20],[1240,120,20,100],[1440,120,20,100],
+    [200,360,240,20],[200,360,20,180],[200,540,100,20],[380,540,60,20],[420,360,20,200],
+    [560,440,300,30],[920,440,300,30],
+    [720,580,40,40],[880,700,40,40],[1080,580,40,40],
+    [120,800,20,200],[120,980,220,20],[320,800,20,200],
+    [400,800,20,200],[400,980,220,20],[600,800,20,200],
+    [680,800,20,200],[680,980,220,20],[880,800,20,200],
+    [960,800,20,200],[960,980,220,20],[1160,800,20,200],
+    [1240,800,20,200],[1240,980,220,20],[1440,800,20,200],
+    [560,720,140,20],[560,720,20,100],
+    [1000,260,140,20],[1120,260,20,100],
+    [740,540,160,50],
+  ];
+  for (const b of blocks) w.push({x:b[0],y:b[1],w:b[2],h:b[3]});
+  return w;
 }
+const menuWalls = buildMenuWalls();
+let mmScanY = 0;
+
+function renderMenuMinimap() {
+  menuMMctx.imageSmoothingEnabled = false;
+  // floor
+  menuMMctx.fillStyle = '#1e2a2a';
+  menuMMctx.fillRect(0, 0, MM_W, MM_H);
+  // tile pattern
+  const ts = Math.round(40 * mmSx);
+  if (ts >= 2) {
+    for (let y = 0; y < MM_H; y += ts) {
+      for (let x = 0; x < MM_W; x += ts) {
+        if (((x/ts)+(y/ts)) % 2 === 0) {
+          menuMMctx.fillStyle = '#182020';
+          menuMMctx.fillRect(x, y, ts, ts);
+        }
+      }
+    }
+  }
+  // walls — shadow + base + edge highlight
+  for (const wall of menuWalls) {
+    const wx = Math.floor(wall.x * mmSx), wy = Math.floor(wall.y * mmSy);
+    const ww = Math.max(1, Math.ceil(wall.w * mmSx)), wh = Math.max(1, Math.ceil(wall.h * mmSy));
+    menuMMctx.fillStyle = '#1a0e06';
+    menuMMctx.fillRect(wx+2, wy+2, ww, wh);
+    menuMMctx.fillStyle = '#6b4820';
+    menuMMctx.fillRect(wx, wy, ww, wh);
+    menuMMctx.fillStyle = '#9a6a30';
+    menuMMctx.fillRect(wx, wy, ww, Math.max(1, Math.ceil(mmSy*3)));
+    menuMMctx.fillRect(wx, wy, Math.max(1, Math.ceil(mmSx*3)), wh);
+  }
+  // animated cyan scan line
+  menuMMctx.fillStyle = 'rgba(122,252,255,0.06)';
+  menuMMctx.fillRect(0, mmScanY, MM_W, 4);
+  menuMMctx.fillStyle = 'rgba(122,252,255,0.20)';
+  menuMMctx.fillRect(0, mmScanY, MM_W, 1);
+  mmScanY = (mmScanY + 1) % MM_H;
+}
+setInterval(renderMenuMinimap, 40);
 
 function drawHeart(ctx, x, y) {
   // pixel heart
