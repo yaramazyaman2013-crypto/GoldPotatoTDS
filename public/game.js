@@ -161,16 +161,292 @@ function startAudioOnGesture() {
 document.addEventListener('click', startAudioOnGesture);
 document.addEventListener('keydown', startAudioOnGesture);
 
-// ============ CLIENT ============
-// socket may fail if opened without server — keep a safe stub so menu still works
-let socket;
-try {
-  socket = io();
-  socket.on('connect_error', () => console.warn('Sunucuya bağlanılamıyor — multiplayer için "npm start" çalıştır.'));
-} catch (e) {
-  console.warn('Socket.IO yüklenemedi — index.html doğrudan açıldı mı? "npm start" ile sunucu çalıştır.');
-  socket = { id: 'offline', emit: () => {}, on: () => {} };
+// ============ P2P NETWORK (PeerJS / WebRTC) ============
+// No central game server — whoever creates a room hosts the
+// authoritative game in their browser. Others connect via WebRTC.
+
+function makeRoomCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let s = '';
+  for (let i = 0; i < 5; i++) s += chars[Math.floor(Math.random() * chars.length)];
+  return s;
 }
+
+const Net = {
+  id: null,
+  mode: null,        // 'host' | 'joiner'
+  peer: null,
+  hostGame: null,
+  hostConn: null,    // joiner -> host conn
+  clients: new Map(),// host: peerId -> conn
+  roomCode: null,
+  ownerId: null,
+  handlers: {},
+
+  on(event, h) { this.handlers[event] = h; },
+  _trigger(event, payload) {
+    const h = this.handlers[event];
+    if (h) h(payload);
+  },
+
+  emit(event, payload, ack) {
+    switch (event) {
+      case 'listRooms': if (typeof payload === 'function') payload([]); return;
+      case 'createRoom': return this._createRoom(payload, ack);
+      case 'joinRoom':   return this._joinRoom(payload, ack);
+      case 'leaveRoom':  return this._leaveRoom();
+      case 'startGame':  return this._startGame();
+      case 'changeColor': return this._changeColor(payload);
+      case 'chatName':    return this._chatName(payload);
+      case 'input':       return this._sendInput(payload);
+      case 'reload':      return this._reload();
+    }
+  },
+
+  _hostCallbacks() {
+    return {
+      onState: (s) => {
+        const msg = { kind: 'state', payload: s };
+        for (const c of this.clients.values()) if (c.open) c.send(msg);
+        this._trigger('state', s);
+      },
+      onKill: (k) => {
+        const msg = { kind: 'kill', payload: k };
+        for (const c of this.clients.values()) if (c.open) c.send(msg);
+        this._trigger('kill', k);
+      },
+      onRoundStart: (d) => {
+        const msg = { kind: 'roundStart', payload: d };
+        for (const c of this.clients.values()) if (c.open) c.send(msg);
+        this._trigger('roundStart', d);
+      },
+      onRoundEnd: (d) => {
+        const msg = { kind: 'roundEnd', payload: d };
+        for (const c of this.clients.values()) if (c.open) c.send(msg);
+        this._trigger('roundEnd', d);
+      },
+    };
+  },
+
+  _broadcastRoomUpdate() {
+    if (!this.hostGame) return;
+    const room = this.hostGame.publicRoom(this.roomCode, this.ownerId);
+    const msg = { kind: 'roomUpdate', payload: room };
+    for (const c of this.clients.values()) if (c.open) c.send(msg);
+    this._trigger('roomUpdate', room);
+  },
+
+  _createRoom({ name, color }, ack) {
+    if (typeof Peer === 'undefined') {
+      ack && ack({ ok: false, error: 'PeerJS yuklenemedi (internet yok?)' });
+      return;
+    }
+    const code = makeRoomCode();
+    this.mode = 'host';
+    this.roomCode = code;
+    setNetStatus('Sunucuya bağlanılıyor (peerjs)...');
+    this.peer = new Peer('gwtds-' + code, { debug: 1 });
+    let acked = false;
+    this.peer.on('open', (id) => {
+      this.id = id;
+      this.ownerId = id;
+      this.hostGame = new HostGame(this._hostCallbacks());
+      this.hostGame.start();
+      this.hostGame.addPlayer(id, name, color);
+      acked = true;
+      setNetStatus('');
+      ack && ack({
+        ok: true,
+        roomId: code,
+        ownerId: id,
+        room: this.hostGame.publicRoom(code, id),
+      });
+    });
+    this.peer.on('error', (e) => {
+      console.warn('Peer error', e);
+      if (!acked) {
+        acked = true;
+        let msg = 'Bağlanılamadı: ' + (e.type || 'unknown');
+        if (e.type === 'unavailable-id') msg = 'Oda kodu meşgul, tekrar dene';
+        if (e.type === 'network' || e.type === 'server-error') msg = 'PeerJS sunucusuna erişilemiyor';
+        ack && ack({ ok: false, error: msg });
+        this._leaveRoom();
+      }
+    });
+    this.peer.on('connection', (conn) => this._handleClientConn(conn));
+  },
+
+  _handleClientConn(conn) {
+    conn.on('open', () => { this.clients.set(conn.peer, conn); });
+    conn.on('data', (msg) => {
+      const from = conn.peer;
+      if (!msg || !msg.kind) return;
+      switch (msg.kind) {
+        case 'joinPlayer': {
+          if (!this.hostGame) return;
+          if (this.hostGame.players.size >= 10) {
+            conn.send({ kind: 'joinedErr', payload: { error: 'Oda dolu' } });
+            try { conn.close(); } catch (e) {}
+            return;
+          }
+          if (this.hostGame.started) {
+            conn.send({ kind: 'joinedErr', payload: { error: 'Oyun başladı' } });
+            try { conn.close(); } catch (e) {}
+            return;
+          }
+          this.hostGame.addPlayer(from, msg.payload.name, msg.payload.color);
+          conn.send({
+            kind: 'joinedOk',
+            payload: {
+              roomId: this.roomCode,
+              ownerId: this.ownerId,
+              selfId: from,
+              room: this.hostGame.publicRoom(this.roomCode, this.ownerId),
+            },
+          });
+          this._broadcastRoomUpdate();
+          break;
+        }
+        case 'input':       this.hostGame && this.hostGame.applyInput(from, msg.payload); break;
+        case 'reload':      this.hostGame && this.hostGame.tryReload(from); break;
+        case 'changeColor': if (this.hostGame) { this.hostGame.setColor(from, msg.payload.color); this._broadcastRoomUpdate(); } break;
+        case 'chatName':    if (this.hostGame) { this.hostGame.setName(from, msg.payload.name); this._broadcastRoomUpdate(); } break;
+      }
+    });
+    conn.on('close', () => {
+      this.clients.delete(conn.peer);
+      if (this.hostGame) {
+        this.hostGame.removePlayer(conn.peer);
+        this._broadcastRoomUpdate();
+      }
+    });
+    conn.on('error', () => {
+      this.clients.delete(conn.peer);
+    });
+  },
+
+  _joinRoom({ roomId, name, color }, ack) {
+    if (typeof Peer === 'undefined') {
+      ack && ack({ ok: false, error: 'PeerJS yuklenemedi (internet yok?)' });
+      return;
+    }
+    this.mode = 'joiner';
+    this.roomCode = String(roomId || '').toUpperCase();
+    setNetStatus('Bağlanılıyor...');
+    this.peer = new Peer(undefined, { debug: 1 });
+    let acked = false;
+    this.peer.on('open', (id) => {
+      this.id = id;
+      const conn = this.peer.connect('gwtds-' + this.roomCode, { reliable: true });
+      this.hostConn = conn;
+      let openTimer = setTimeout(() => {
+        if (!acked) {
+          acked = true;
+          ack && ack({ ok: false, error: 'Oda bulunamadı veya host yanıt vermiyor' });
+          this._leaveRoom();
+        }
+      }, 8000);
+      conn.on('open', () => {
+        conn.send({ kind: 'joinPlayer', name, color });
+      });
+      conn.on('data', (msg) => {
+        if (msg.kind === 'joinedOk') {
+          clearTimeout(openTimer);
+          if (acked) { this._trigger('roomUpdate', msg.payload.room); return; }
+          acked = true;
+          this.ownerId = msg.payload.ownerId;
+          setNetStatus('');
+          ack && ack({
+            ok: true,
+            roomId: msg.payload.roomId,
+            ownerId: msg.payload.ownerId,
+            room: msg.payload.room,
+          });
+        } else if (msg.kind === 'joinedErr') {
+          clearTimeout(openTimer);
+          if (acked) return;
+          acked = true;
+          ack && ack({ ok: false, error: msg.payload.error });
+          this._leaveRoom();
+        } else {
+          this._trigger(msg.kind, msg.payload);
+        }
+      });
+      conn.on('close', () => {
+        clearTimeout(openTimer);
+        if (!acked) { acked = true; ack && ack({ ok: false, error: 'Bağlantı kapatıldı' }); }
+        this._trigger('hostDisconnected', null);
+      });
+      conn.on('error', (e) => {
+        clearTimeout(openTimer);
+        if (!acked) { acked = true; ack && ack({ ok: false, error: 'Bağlantı hatası' }); }
+      });
+    });
+    this.peer.on('error', (e) => {
+      if (acked) return;
+      acked = true;
+      let msg = 'Bağlanılamadı: ' + (e.type || 'unknown');
+      if (e.type === 'peer-unavailable') msg = 'Oda bulunamadı';
+      if (e.type === 'network' || e.type === 'server-error') msg = 'PeerJS sunucusuna erişilemiyor';
+      ack && ack({ ok: false, error: msg });
+      this._leaveRoom();
+    });
+  },
+
+  _leaveRoom() {
+    for (const c of this.clients.values()) { try { c.close(); } catch (e) {} }
+    this.clients.clear();
+    if (this.hostConn) { try { this.hostConn.close(); } catch (e) {} }
+    if (this.hostGame) { this.hostGame.stop(); this.hostGame = null; }
+    if (this.peer) { try { this.peer.destroy(); } catch (e) {} }
+    this.peer = null; this.id = null; this.mode = null;
+    this.hostConn = null; this.roomCode = null; this.ownerId = null;
+  },
+
+  _startGame() {
+    if (this.mode === 'host' && this.hostGame && !this.hostGame.started) {
+      this.hostGame.startRound();
+    }
+  },
+  _changeColor({ color }) {
+    if (this.mode === 'host' && this.hostGame) {
+      this.hostGame.setColor(this.id, color);
+      this._broadcastRoomUpdate();
+    } else if (this.hostConn && this.hostConn.open) {
+      this.hostConn.send({ kind: 'changeColor', payload: { color } });
+    }
+  },
+  _chatName({ name }) {
+    if (this.mode === 'host' && this.hostGame) {
+      this.hostGame.setName(this.id, name);
+      this._broadcastRoomUpdate();
+    } else if (this.hostConn && this.hostConn.open) {
+      this.hostConn.send({ kind: 'chatName', payload: { name } });
+    }
+  },
+  _sendInput(input) {
+    if (this.mode === 'host' && this.hostGame) {
+      this.hostGame.applyInput(this.id, input);
+    } else if (this.hostConn && this.hostConn.open) {
+      this.hostConn.send({ kind: 'input', payload: input });
+    }
+  },
+  _reload() {
+    if (this.mode === 'host' && this.hostGame) {
+      this.hostGame.tryReload(this.id);
+    } else if (this.hostConn && this.hostConn.open) {
+      this.hostConn.send({ kind: 'reload' });
+    }
+  },
+};
+
+function setNetStatus(msg) {
+  const el = document.getElementById('netStatus');
+  if (el) el.textContent = msg || '';
+}
+
+// existing code uses `socket` global; alias it
+const socket = Net;
 
 const COLORS = [
   '#ff5577', '#ff8a3c', '#ffd24a', '#7ad24a',
@@ -374,46 +650,22 @@ $('btnWardrobe').addEventListener('click', () => palette.classList.toggle('hidde
 // apply language on load
 applyLang(currentLang);
 
-$('btnPlay').addEventListener('click', () => { show('rooms'); refreshRooms(); });
+$('btnPlay').addEventListener('click', () => { show('rooms'); setNetStatus(''); });
 $('btnSettings').addEventListener('click', () => show('settings'));
 $('btnBack1').addEventListener('click', () => show('menu'));
 $('btnBack2').addEventListener('click', () => show('menu'));
 
-function setLang(lang) {
-  applyLang(lang);
-  // refresh dynamic strings
-  if (!$('rooms').classList.contains('hidden')) refreshRooms();
-}
+function setLang(lang) { applyLang(lang); }
 $('btnLangTR').addEventListener('click', () => setLang('tr'));
 $('btnLangEN').addEventListener('click', () => setLang('en'));
 $('pauseLangTR').addEventListener('click', () => setLang('tr'));
 $('pauseLangEN').addEventListener('click', () => setLang('en'));
 
 // ===== Rooms =====
-function refreshRooms() {
-  socket.emit('listRooms', (list) => {
-    const root = $('roomList');
-    root.innerHTML = '';
-    if (!list.length) {
-      const d = I18N[currentLang];
-      root.innerHTML = `<div class="hint">${d.openRooms}...</div>`;
-      return;
-    }
-    list.forEach(r => {
-      const row = document.createElement('div');
-      row.className = 'room-row';
-      row.innerHTML = `<span>${r.id}</span><span>${r.count}/${r.max}</span>`;
-      const b = document.createElement('button');
-      b.className = 'pixel-btn small'; b.textContent = I18N[currentLang].join;
-      b.onclick = () => joinRoom(r.id);
-      row.appendChild(b);
-      root.appendChild(row);
-    });
-  });
-}
 $('btnCreateRoom').addEventListener('click', () => {
   socket.emit('createRoom', { name: state.name, color: state.color }, (res) => {
     if (res.ok) { enterLobby(res.roomId, res.ownerId); if (res.room) renderLobby(res.room); }
+    else alert(res.error || 'Bağlanılamadı');
   });
 });
 $('btnJoinCode').addEventListener('click', () => {
@@ -443,8 +695,6 @@ function renderLobby(room) {
   $('waitMsg').classList.toggle('hidden', isHost);
 }
 
-setInterval(() => { if (!$('rooms').classList.contains('hidden')) refreshRooms(); }, 3000);
-
 function enterLobby(roomId, ownerId) {
   state.roomId = roomId; state.ownerId = ownerId;
   state.selfId = socket.id;
@@ -461,6 +711,17 @@ $('btnStart').addEventListener('click', () => socket.emit('startGame'));
 socket.on('roomUpdate', (room) => {
   if (!state.roomId || room.id !== state.roomId) return;
   renderLobby(room);
+});
+
+socket.on('hostDisconnected', () => {
+  if (!state.roomId) return;
+  alert('Host bağlantıyı kesti');
+  state.roomId = null; state.ownerId = null;
+  state.inGame = false; state.serverState = null;
+  $('pauseMenu').classList.add('hidden');
+  $('roundEnd').classList.add('hidden');
+  $('dead').classList.add('hidden');
+  show('menu');
 });
 
 // ===== Game =====

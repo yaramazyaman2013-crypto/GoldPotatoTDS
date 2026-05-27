@@ -36,11 +36,11 @@
     <button id="btnBack1" class="pixel-btn small" data-i18n="back">GERI</button>
     <button id="btnCreateRoom" class="pixel-btn" data-i18n="createRoom">ODA OLUSTUR</button>
     <div class="join-row">
-      <input id="joinCode" data-i18n-ph="roomCode" placeholder="ODA KODU" maxlength="5"/>
+      <input id="joinCode" data-i18n-ph="roomCode" placeholder="ODA KODU" maxlength="6"/>
       <button id="btnJoinCode" class="pixel-btn" data-i18n="join">KATIL</button>
     </div>
-    <h3 class="title-sm" data-i18n="openRooms">AÇIK ODALAR</h3>
-    <div id="roomList" class="room-list"></div>
+    <div class="hint" data-i18n="codeHint">Oda kodunu host paylasmali. Hicbir oyuncu sunucu kurmaz; tarayicilar birbirine baglanir (WebRTC).</div>
+    <div id="netStatus" class="hint"></div>
   </div>
 </div>
 
@@ -106,7 +106,8 @@
   </div>
 </div>
 
-<script src="/socket.io/socket.io.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="peer-host.js"></script>
 <script src="game.js"></script>
 </body>
 </html>
