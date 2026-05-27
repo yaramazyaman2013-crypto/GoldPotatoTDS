@@ -495,11 +495,11 @@ $('btnLeaveGame').addEventListener('click', () => {
   show('menu');
 });
 
-// Input loop: 20 Hz
+// Input loop: ~33 Hz
 setInterval(() => {
   if (!state.inGame) return;
   socket.emit('input', { keys, angle: computeAngle(), mouseDown });
-}, 50);
+}, 30);
 
 // Footstep sounds
 let lastStepAt = 0;
@@ -579,10 +579,18 @@ function renderHUD() {
   $('dead').classList.toggle('hidden', !me || me.alive);
   // ammo
   if (me) {
-    $('ammoCur').textContent = me.reloading ? '...' : me.ammo;
-    const maxEl = $('ammo').querySelector('.max');
-    if (maxEl) maxEl.textContent = '/' + (me.maxAmmo || 30);
-    $('ammo').classList.toggle('reloading', !!me.reloading);
+    if (me.rockets > 0) {
+      $('ammoCur').textContent = '🚀' + me.rockets;
+      const maxEl = $('ammo').querySelector('.max'); if (maxEl) maxEl.textContent = '';
+      $('ammo').classList.add('hasRocket');
+      $('ammo').classList.remove('reloading');
+    } else {
+      $('ammoCur').textContent = me.reloading ? '...' : me.ammo;
+      const maxEl = $('ammo').querySelector('.max');
+      if (maxEl) maxEl.textContent = '/' + (me.maxAmmo || 30);
+      $('ammo').classList.toggle('reloading', !!me.reloading);
+      $('ammo').classList.remove('hasRocket');
+    }
   }
   // leaderboard
   const lb = $('leaderboard');
@@ -600,6 +608,60 @@ function renderHUD() {
     d.textContent = `${k.killer} > ${k.victim}`;
     kf.appendChild(d);
   });
+}
+
+function drawRocketPickup(ctx, x, y) {
+  // pixel rocket lying on ground
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.fillRect(x-12, y-3, 24, 6);
+  // body
+  ctx.fillStyle = '#2a2a36'; ctx.fillRect(x-10, y-4, 18, 8);
+  ctx.fillStyle = '#a4a4b8'; ctx.fillRect(x-10, y-4, 18, 2);
+  ctx.fillStyle = '#1a1a22'; ctx.fillRect(x-10, y+2, 18, 2);
+  // nose cone (red)
+  ctx.fillStyle = '#ff3050'; ctx.fillRect(x+8, y-3, 4, 6);
+  ctx.fillStyle = '#ff8090'; ctx.fillRect(x+8, y-3, 4, 1);
+  // fins
+  ctx.fillStyle = '#5a5a6a';
+  ctx.fillRect(x-12, y-5, 3, 3);
+  ctx.fillRect(x-12, y+2, 3, 3);
+  ctx.restore();
+}
+
+function drawRocket(ctx, x, y, angle) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle || 0);
+  // flame tail
+  ctx.fillStyle = '#ffd24a'; ctx.fillRect(-12, -2, 6, 4);
+  ctx.fillStyle = '#ff8a3c'; ctx.fillRect(-10, -1, 4, 2);
+  // body
+  ctx.fillStyle = '#2a2a36'; ctx.fillRect(-6, -3, 10, 6);
+  ctx.fillStyle = '#a4a4b8'; ctx.fillRect(-6, -3, 10, 1);
+  // nose
+  ctx.fillStyle = '#ff3050'; ctx.fillRect(4, -2, 4, 4);
+  ctx.restore();
+}
+
+// Explosions (visual only, server emits 'explosion')
+const explosions = [];
+socket.on('explosion', ({x, y, r}) => {
+  explosions.push({x, y, r, t: Date.now()});
+});
+function drawExplosions() {
+  const now = Date.now();
+  for (let i = explosions.length-1; i >= 0; i--) {
+    const e = explosions[i];
+    const age = now - e.t;
+    if (age > 400) { explosions.splice(i, 1); continue; }
+    const a = 1 - age/400;
+    const rr = e.r * (0.3 + 0.7 * (age/400));
+    gctx.fillStyle = `rgba(255, 200, 60, ${a * 0.6})`;
+    gctx.beginPath(); gctx.arc(e.x - camX, e.y - camY, rr, 0, Math.PI*2); gctx.fill();
+    gctx.fillStyle = `rgba(255, 100, 40, ${a * 0.9})`;
+    gctx.beginPath(); gctx.arc(e.x - camX, e.y - camY, rr*0.6, 0, Math.PI*2); gctx.fill();
+  }
 }
 
 function drawHeart(ctx, x, y) {
@@ -631,33 +693,62 @@ function render() {
   if (state.mapH < H) camY = (state.mapH - H)/2;
 
   gctx.imageSmoothingEnabled = false;
-  gctx.fillStyle = '#3a4a4a';
+  // grass tile background
+  gctx.fillStyle = '#4a6a3a';
   gctx.fillRect(0,0,W,H);
-  const ts = 40;
+  const ts = 32;
   const sx = -(camX % ts), sy = -(camY % ts);
   for (let y = sy; y < H; y += ts) {
     for (let x = sx; x < W; x += ts) {
       const tx = Math.floor((x+camX)/ts), ty = Math.floor((y+camY)/ts);
-      gctx.fillStyle = (tx+ty)%2===0 ? '#3a4a4a' : '#324242';
+      // checkered grass shades + occasional dirt patch (deterministic by tile)
+      const hash = ((tx*73856093) ^ (ty*19349663)) >>> 0;
+      const isDirt = (hash % 17) === 0;
+      let col;
+      if (isDirt) col = '#6b4a2a';
+      else col = (tx+ty)%2===0 ? '#4a6a3a' : '#3e5a30';
+      gctx.fillStyle = col;
       gctx.fillRect(x, y, ts, ts);
+      // grass tuft decoration
+      if (!isDirt && (hash % 23) === 0) {
+        gctx.fillStyle = '#6a8a4a';
+        gctx.fillRect(x+6, y+10, 2, 4);
+        gctx.fillRect(x+10, y+8, 2, 6);
+        gctx.fillRect(x+14, y+12, 2, 4);
+      }
     }
   }
 
+  // stone walls
   for (const w of state.walls) {
     const x = w.x-camX, y = w.y-camY;
     if (x+w.w<0||y+w.h<0||x>W||y>H) continue;
-    gctx.fillStyle = '#5a3a1a'; gctx.fillRect(x,y,w.w,w.h);
-    gctx.fillStyle = '#8a5a2a'; gctx.fillRect(x,y,w.w,4); gctx.fillRect(x,y,4,w.h);
-    gctx.fillStyle = '#2a1a0a'; gctx.fillRect(x,y+w.h-3,w.w,3); gctx.fillRect(x+w.w-3,y,3,w.h);
+    gctx.fillStyle = '#3a3a4a'; gctx.fillRect(x,y,w.w,w.h);
+    // top/left highlights (lighter stone)
+    gctx.fillStyle = '#6a6a7a'; gctx.fillRect(x,y,w.w,3); gctx.fillRect(x,y,3,w.h);
+    // bottom/right shadow
+    gctx.fillStyle = '#1a1a24'; gctx.fillRect(x,y+w.h-3,w.w,3); gctx.fillRect(x+w.w-3,y,3,w.h);
+    // brick texture: vertical seams
+    gctx.fillStyle = '#2a2a36';
+    for (let bx = 12; bx < w.w-4; bx += 16) gctx.fillRect(x+bx, y+3, 1, w.h-6);
   }
 
+  // hearts and rocket pickups
   for (const h of ss.hearts) drawHeart(gctx, h.x-camX, h.y-camY);
+  if (ss.rocketPickups) {
+    for (const r of ss.rocketPickups) drawRocketPickup(gctx, r.x-camX, r.y-camY);
+  }
 
+  // bullets / rockets
   for (const b of ss.bullets) {
     const x=b.x-camX, y=b.y-camY;
-    gctx.fillStyle='#000'; gctx.fillRect(x-3,y-3,6,6);
-    gctx.fillStyle='#ffd24a'; gctx.fillRect(x-2,y-2,4,4);
+    if (b.type === 'rocket') drawRocket(gctx, x, y, b.angle||0);
+    else {
+      gctx.fillStyle='#000'; gctx.fillRect(x-3,y-3,6,6);
+      gctx.fillStyle='#ffd24a'; gctx.fillRect(x-2,y-2,4,4);
+    }
   }
+  drawExplosions();
 
   for (const p of ss.players) {
     drawRobotTopDown(gctx, p.x-camX, p.y-camY, p.color, p.angle, p.alive);
@@ -705,49 +796,53 @@ const MM_W=400, MM_H=300, MM_MAP_W=1600, MM_MAP_H=1200;
 const mmSx=MM_W/MM_MAP_W, mmSy=MM_H/MM_MAP_H;
 
 function buildMenuWalls() {
-  const W=MM_MAP_W, H=MM_MAP_H, w=[];
-  w.push({x:0,y:0,w:W,h:20}); w.push({x:0,y:H-20,w:W,h:20});
-  w.push({x:0,y:0,w:20,h:H}); w.push({x:W-20,y:0,w:20,h:H});
-  const blocks = [
-    [120,120,220,20],[120,120,20,100],[320,120,20,100],
-    [400,120,220,20],[400,120,20,100],[600,120,20,100],
-    [680,120,220,20],[680,120,20,100],[880,120,20,100],
-    [960,120,220,20],[960,120,20,100],[1160,120,20,100],
-    [1240,120,220,20],[1240,120,20,100],[1440,120,20,100],
-    [200,360,240,20],[200,360,20,180],[200,540,100,20],[380,540,60,20],[420,360,20,200],
-    [560,440,300,30],[920,440,300,30],
-    [720,580,40,40],[880,700,40,40],[1080,580,40,40],
-    [120,800,20,200],[120,980,220,20],[320,800,20,200],
-    [400,800,20,200],[400,980,220,20],[600,800,20,200],
-    [680,800,20,200],[680,980,220,20],[880,800,20,200],
-    [960,800,20,200],[960,980,220,20],[1160,800,20,200],
-    [1240,800,20,200],[1240,980,220,20],[1440,800,20,200],
-    [560,720,140,20],[560,720,20,100],
-    [1000,260,140,20],[1120,260,20,100],[740,540,160,50],
+  const W=MM_MAP_W, H=MM_MAP_H, T=20, out=[];
+  out.push({x:0,y:0,w:W,h:T}); out.push({x:0,y:H-T,w:W,h:T});
+  out.push({x:0,y:0,w:T,h:H}); out.push({x:W-T,y:0,w:T,h:H});
+  function hWall(x1,y1,x2){ if(x2>x1) out.push({x:x1,y:y1,w:x2-x1,h:T}); }
+  function vWall(x1,y1,y2){ if(y2>y1) out.push({x:x1,y:y1,w:T,h:y2-y1}); }
+  function building(x, y, w, h, g) {
+    g = g || {};
+    if (!g.t) hWall(x, y, x+w); else { hWall(x,y,g.t[0]); hWall(g.t[1],y,x+w); }
+    if (!g.b) hWall(x, y+h-T, x+w); else { hWall(x,y+h-T,g.b[0]); hWall(g.b[1],y+h-T,x+w); }
+    if (!g.l) vWall(x, y, y+h); else { vWall(x,y,g.l[0]); vWall(x,g.l[1],y+h); }
+    if (!g.r) vWall(x+w-T, y, y+h); else { vWall(x+w-T,y,g.r[0]); vWall(x+w-T,g.r[1],y+h); }
+  }
+  building(200, 150, 280, 240, { b: [310, 380] });
+  building(720, 100, 200, 180, { b: [790, 850] });
+  building(1140, 150, 280, 260, { l: [220, 290], b: [1240, 1320] });
+  building(180, 780, 280, 260, { t: [260, 330] });
+  building(700, 880, 220, 200, { t: [770, 840], r: [950, 1020] });
+  building(1140, 780, 280, 260, { l: [870, 940] });
+  const pillars = [
+    [580,460,50,50],[1000,500,50,50],[820,600,40,40],
+    [560,720,40,40],[1040,700,40,40],[380,540,40,40],[1220,560,40,40],
   ];
-  for (const b of blocks) w.push({x:b[0],y:b[1],w:b[2],h:b[3]});
-  return w;
+  for (const p of pillars) out.push({x:p[0],y:p[1],w:p[2],h:p[3]});
+  return out;
 }
 const menuWalls = buildMenuWalls();
 let mmScanY = 0;
 
 function renderMenuMinimap() {
   menuMMctx.imageSmoothingEnabled = false;
-  menuMMctx.fillStyle = '#1e2a2a'; menuMMctx.fillRect(0,0,MM_W,MM_H);
-  const ts = Math.round(40*mmSx);
+  // grass base
+  menuMMctx.fillStyle = '#3e5a30'; menuMMctx.fillRect(0,0,MM_W,MM_H);
+  const ts = Math.round(32*mmSx);
   if (ts >= 2) {
     for (let y=0;y<MM_H;y+=ts) for (let x=0;x<MM_W;x+=ts) {
       if (((x/ts)+(y/ts))%2===0) {
-        menuMMctx.fillStyle='#182020'; menuMMctx.fillRect(x,y,ts,ts);
+        menuMMctx.fillStyle='#4a6a3a'; menuMMctx.fillRect(x,y,ts,ts);
       }
     }
   }
+  // stone walls
   for (const wall of menuWalls) {
     const wx=Math.floor(wall.x*mmSx), wy=Math.floor(wall.y*mmSy);
     const ww=Math.max(1,Math.ceil(wall.w*mmSx)), wh=Math.max(1,Math.ceil(wall.h*mmSy));
-    menuMMctx.fillStyle='#1a0e06'; menuMMctx.fillRect(wx+2,wy+2,ww,wh);
-    menuMMctx.fillStyle='#6b4820'; menuMMctx.fillRect(wx,wy,ww,wh);
-    menuMMctx.fillStyle='#9a6a30';
+    menuMMctx.fillStyle='#1a1a24'; menuMMctx.fillRect(wx+2,wy+2,ww,wh);
+    menuMMctx.fillStyle='#3a3a4a'; menuMMctx.fillRect(wx,wy,ww,wh);
+    menuMMctx.fillStyle='#6a6a7a';
     menuMMctx.fillRect(wx,wy,ww,Math.max(1,Math.ceil(mmSy*3)));
     menuMMctx.fillRect(wx,wy,Math.max(1,Math.ceil(mmSx*3)),wh);
   }

@@ -25,48 +25,91 @@ const C = {
   HEART_SPAWN_MS: 60 * 1000,
   MAX_HEARTS: 8,
   MAX_PLAYERS: 10,
-  PLAYER_SPEED: 3,
-  BULLET_SPEED: 9,
+  PLAYER_SPEED: 4.8,
+  BULLET_SPEED: 14,
   PLAYER_R: 14,
   BULLET_R: 3,
-  FIRE_COOLDOWN: 90,
+  FIRE_COOLDOWN: 80,
   HP_PER_LIFE: 10,
   START_LIVES: 3,
   MAX_LIVES: 5,
   MAG_SIZE: 30,
   RELOAD_MS: 1500,
-  TICK_MS: 33,
+  TICK_MS: 25,
+  // Rocket pickup
+  ROCKET_SPAWN_MS: 35 * 1000,
+  MAX_ROCKET_PICKUPS: 3,
+  ROCKET_CHARGES: 2,         // shots per pickup
+  ROCKET_SPEED: 11,
+  ROCKET_R: 6,
+  ROCKET_FIRE_COOLDOWN: 320, // slower fire rate
+  ROCKET_AOE_R: 70,          // splash radius
 };
 
 // ============================================================
-// MAP
+// MAP — outdoor stone buildings with dirt paths
 // ============================================================
+// Building helper: outline a rectangle with optional gaps for entrances.
+// gaps: { t:[start,end], b:[start,end], l:[start,end], r:[start,end] }
+function building(x, y, w, h, gaps) {
+  const T = 20, out = [];
+  gaps = gaps || {};
+  // top wall (horizontal at y)
+  function hWall(x1, y1, x2) { if (x2 > x1) out.push({x:x1, y:y1, w:x2-x1, h:T}); }
+  function vWall(x1, y1, y2) { if (y2 > y1) out.push({x:x1, y:y1, w:T, h:y2-y1}); }
+  // top
+  if (!gaps.t) hWall(x, y, x+w);
+  else { hWall(x, y, gaps.t[0]); hWall(gaps.t[1], y, x+w); }
+  // bottom
+  if (!gaps.b) hWall(x, y+h-T, x+w);
+  else { hWall(x, y+h-T, gaps.b[0]); hWall(gaps.b[1], y+h-T, x+w); }
+  // left
+  if (!gaps.l) vWall(x, y, y+h);
+  else { vWall(x, y, gaps.l[0]); vWall(x, gaps.l[1], y+h); }
+  // right
+  if (!gaps.r) vWall(x+w-T, y, y+h);
+  else { vWall(x+w-T, y, gaps.r[0]); vWall(x+w-T, gaps.r[1], y+h); }
+  return out;
+}
+
 function buildWalls() {
   const W = C.MAP_W, H = C.MAP_H;
   const w = [];
+  // outer border
   w.push({x:0,y:0,w:W,h:20});
   w.push({x:0,y:H-20,w:W,h:20});
   w.push({x:0,y:0,w:20,h:H});
   w.push({x:W-20,y:0,w:20,h:H});
-  const blocks = [
-    [120,120,220,20],[120,120,20,100],[320,120,20,100],
-    [400,120,220,20],[400,120,20,100],[600,120,20,100],
-    [680,120,220,20],[680,120,20,100],[880,120,20,100],
-    [960,120,220,20],[960,120,20,100],[1160,120,20,100],
-    [1240,120,220,20],[1240,120,20,100],[1440,120,20,100],
-    [200,360,240,20],[200,360,20,180],[200,540,100,20],[380,540,60,20],[420,360,20,200],
-    [560,440,300,30],[920,440,300,30],
-    [720,580,40,40],[880,700,40,40],[1080,580,40,40],
-    [120,800,20,200],[120,980,220,20],[320,800,20,200],
-    [400,800,20,200],[400,980,220,20],[600,800,20,200],
-    [680,800,20,200],[680,980,220,20],[880,800,20,200],
-    [960,800,20,200],[960,980,220,20],[1160,800,20,200],
-    [1240,800,20,200],[1240,980,220,20],[1440,800,20,200],
-    [560,720,140,20],[560,720,20,100],
-    [1000,260,140,20],[1120,260,20,100],
-    [740,540,160,50],
+
+  // Buildings (outlined rectangles with entrances)
+  const buildings = [
+    // NW big building — entrance south
+    building(200, 150, 280, 240, { b: [310, 380] }),
+    // N small building — entrance south
+    building(720, 100, 200, 180, { b: [790, 850] }),
+    // NE big building — entrance west + south
+    building(1140, 150, 280, 260, { l: [220, 290], b: [1240, 1320] }),
+    // SW building — entrance north
+    building(180, 780, 280, 260, { t: [260, 330] }),
+    // S center building — entrance north and east
+    building(700, 880, 220, 200, { t: [770, 840], r: [950, 1020] }),
+    // SE building — entrance west
+    building(1140, 780, 280, 260, { l: [870, 940] }),
   ];
-  for (const b of blocks) w.push({x:b[0],y:b[1],w:b[2],h:b[3]});
+  for (const arr of buildings) for (const wall of arr) w.push(wall);
+
+  // Scattered pillars / small obstacles
+  const pillars = [
+    [580, 460, 50, 50],
+    [1000, 500, 50, 50],
+    [820, 600, 40, 40],
+    [560, 720, 40, 40],
+    [1040, 700, 40, 40],
+    [380, 540, 40, 40],
+    [1220, 560, 40, 40],
+  ];
+  for (const p of pillars) w.push({x:p[0], y:p[1], w:p[2], h:p[3]});
+
   return w;
 }
 const WALLS = buildWalls();
@@ -109,9 +152,9 @@ function newRoom(ownerSocketId, ownerName, ownerColor) {
     code, ownerId: ownerSocketId,
     started: false,
     players: new Map(),
-    bullets: [], hearts: [],
-    roundEndsAt: 0, lastHeartSpawn: 0,
-    nextBulletId: 1, nextHeartId: 1,
+    bullets: [], hearts: [], rocketPickups: [],
+    roundEndsAt: 0, lastHeartSpawn: 0, lastRocketSpawn: 0,
+    nextBulletId: 1, nextHeartId: 1, nextRocketId: 1,
     tickHandle: null, pendingRestart: null,
   };
   addPlayer(room, ownerSocketId, ownerName, ownerColor);
@@ -128,6 +171,7 @@ function addPlayer(room, id, name, color) {
     hp: C.HP_PER_LIFE, lives: C.START_LIVES,
     alive: true,
     ammo: C.MAG_SIZE, reloading: false, reloadEndsAt: 0,
+    rockets: 0,
     kills: 0,
     keys: {w:false,a:false,s:false,d:false},
     mouseDown: false, fireCd: 0,
@@ -154,20 +198,32 @@ function spawnHeart(room) {
   }
 }
 
+function spawnRocketPickup(room) {
+  if (room.rocketPickups.length >= C.MAX_ROCKET_PICKUPS) return;
+  for (let i = 0; i < 50; i++) {
+    const x = 60 + Math.random() * (C.MAP_W - 120);
+    const y = 60 + Math.random() * (C.MAP_H - 120);
+    if (!hitsWall(x, y, 12)) { room.rocketPickups.push({id: room.nextRocketId++, x, y}); return; }
+  }
+}
+
 function startRound(room) {
   room.started = true;
-  room.bullets = []; room.hearts = [];
+  room.bullets = []; room.hearts = []; room.rocketPickups = [];
   room.roundEndsAt = Date.now() + C.ROUND_MS;
   room.lastHeartSpawn = Date.now();
-  room.nextBulletId = 1; room.nextHeartId = 1;
+  room.lastRocketSpawn = Date.now();
+  room.nextBulletId = 1; room.nextHeartId = 1; room.nextRocketId = 1;
   for (const p of room.players.values()) {
     const s = randomSpawn();
     p.x = s.x; p.y = s.y;
     p.hp = C.HP_PER_LIFE; p.lives = C.START_LIVES;
     p.alive = true; p.kills = 0; p.angle = 0; p.fireCd = 0;
     p.ammo = C.MAG_SIZE; p.reloading = false; p.reloadEndsAt = 0;
+    p.rockets = 0;
   }
   for (let i = 0; i < 4; i++) spawnHeart(room);
+  spawnRocketPickup(room);
   io.to(room.code).emit('roundStart', {
     endsAt: room.roundEndsAt,
     mapW: C.MAP_W, mapH: C.MAP_H, walls: WALLS,
@@ -213,6 +269,9 @@ function tick(room) {
   if (now - room.lastHeartSpawn >= C.HEART_SPAWN_MS) {
     spawnHeart(room); room.lastHeartSpawn = now;
   }
+  if (now - room.lastRocketSpawn >= C.ROCKET_SPAWN_MS) {
+    spawnRocketPickup(room); room.lastRocketSpawn = now;
+  }
 
   for (const p of room.players.values()) {
     if (!p.alive) continue;
@@ -227,16 +286,27 @@ function tick(room) {
     if (p.reloading && now >= p.reloadEndsAt) {
       p.reloading = false; p.ammo = C.MAG_SIZE;
     }
-    if (p.mouseDown && p.fireCd <= 0 && p.ammo > 0 && !p.reloading) {
-      p.fireCd = C.FIRE_COOLDOWN; p.ammo--;
-      const m = 20;
-      room.bullets.push({
-        id: room.nextBulletId++, owner: p.id,
-        x: p.x+Math.cos(p.angle)*m, y: p.y+Math.sin(p.angle)*m,
-        vx: Math.cos(p.angle)*C.BULLET_SPEED, vy: Math.sin(p.angle)*C.BULLET_SPEED,
-        life: 80,
-      });
-      if (p.ammo === 0) { p.reloading = true; p.reloadEndsAt = now + C.RELOAD_MS; }
+    if (p.mouseDown && p.fireCd <= 0 && !p.reloading) {
+      if (p.rockets > 0) {
+        p.fireCd = C.ROCKET_FIRE_COOLDOWN; p.rockets--;
+        const m = 22;
+        room.bullets.push({
+          id: room.nextBulletId++, owner: p.id, type: 'rocket',
+          x: p.x+Math.cos(p.angle)*m, y: p.y+Math.sin(p.angle)*m,
+          vx: Math.cos(p.angle)*C.ROCKET_SPEED, vy: Math.sin(p.angle)*C.ROCKET_SPEED,
+          angle: p.angle, life: 120,
+        });
+      } else if (p.ammo > 0) {
+        p.fireCd = C.FIRE_COOLDOWN; p.ammo--;
+        const m = 20;
+        room.bullets.push({
+          id: room.nextBulletId++, owner: p.id, type: 'bullet',
+          x: p.x+Math.cos(p.angle)*m, y: p.y+Math.sin(p.angle)*m,
+          vx: Math.cos(p.angle)*C.BULLET_SPEED, vy: Math.sin(p.angle)*C.BULLET_SPEED,
+          life: 80,
+        });
+        if (p.ammo === 0) { p.reloading = true; p.reloadEndsAt = now + C.RELOAD_MS; }
+      }
     }
     for (let i = room.hearts.length-1; i >= 0; i--) {
       const h = room.hearts[i];
@@ -244,27 +314,72 @@ function tick(room) {
         p.lives++; room.hearts.splice(i,1);
       }
     }
+    // rocket pickup
+    for (let i = room.rocketPickups.length-1; i >= 0; i--) {
+      const r = room.rocketPickups[i];
+      if ((r.x-p.x)**2+(r.y-p.y)**2 < (C.PLAYER_R+12)**2) {
+        p.rockets += C.ROCKET_CHARGES;
+        room.rocketPickups.splice(i, 1);
+      }
+    }
+  }
+
+  function applyDamage(victim, dmg, killerId) {
+    victim.hp -= dmg;
+    if (victim.hp <= 0) {
+      victim.lives--;
+      const killer = room.players.get(killerId);
+      if (killer && killer !== victim) killer.kills++;
+      io.to(room.code).emit('kill', {killer: killer?killer.name:'?', victim: victim.name});
+      if (victim.lives <= 0) { victim.alive = false; }
+      else { const s=randomSpawn(); victim.x=s.x; victim.y=s.y; victim.hp=C.HP_PER_LIFE; }
+    }
   }
 
   for (let i = room.bullets.length-1; i >= 0; i--) {
     const b = room.bullets[i];
     b.x += b.vx; b.y += b.vy; b.life--;
-    if (b.life<=0||b.x<0||b.y<0||b.x>C.MAP_W||b.y>C.MAP_H) { room.bullets.splice(i,1); continue; }
-    if (hitsWall(b.x, b.y, C.BULLET_R)) { room.bullets.splice(i,1); continue; }
-    for (const p of room.players.values()) {
-      if (!p.alive || p.id===b.owner) continue;
-      if ((p.x-b.x)**2+(p.y-b.y)**2 < C.PLAYER_R**2) {
-        p.hp--; room.bullets.splice(i,1);
-        if (p.hp <= 0) {
-          p.lives--;
-          const killer = room.players.get(b.owner);
-          if (killer) killer.kills++;
-          io.to(room.code).emit('kill', {killer: killer?killer.name:'?', victim: p.name});
-          if (p.lives <= 0) { p.alive = false; }
-          else { const s=randomSpawn(); p.x=s.x; p.y=s.y; p.hp=C.HP_PER_LIFE; }
+    const isRocket = b.type === 'rocket';
+    const r = isRocket ? C.ROCKET_R : C.BULLET_R;
+    let detonated = false;
+
+    if (b.life<=0||b.x<0||b.y<0||b.x>C.MAP_W||b.y>C.MAP_H) {
+      if (isRocket) detonated = true;
+      else { room.bullets.splice(i,1); continue; }
+    }
+    if (!detonated && hitsWall(b.x, b.y, r)) {
+      if (isRocket) detonated = true;
+      else { room.bullets.splice(i,1); continue; }
+    }
+
+    if (!detonated) {
+      for (const p of room.players.values()) {
+        if (!p.alive || p.id===b.owner) continue;
+        if ((p.x-b.x)**2+(p.y-b.y)**2 < (C.PLAYER_R + r)**2) {
+          if (isRocket) { detonated = true; }
+          else {
+            applyDamage(p, 1, b.owner);
+            room.bullets.splice(i,1);
+          }
+          break;
         }
-        break;
       }
+    }
+
+    if (detonated && isRocket) {
+      // splash damage
+      io.to(room.code).emit('explosion', {x: b.x, y: b.y, r: C.ROCKET_AOE_R});
+      for (const p of room.players.values()) {
+        if (!p.alive) continue;
+        const d2 = (p.x-b.x)**2 + (p.y-b.y)**2;
+        if (d2 < C.ROCKET_AOE_R**2) {
+          // direct hit center = 1-shot kill; falloff with distance
+          const dist = Math.sqrt(d2);
+          const dmg = dist < 30 ? (C.HP_PER_LIFE + 1) : Math.ceil(C.HP_PER_LIFE * (1 - dist/C.ROCKET_AOE_R));
+          if (dmg > 0) applyDamage(p, dmg, b.owner);
+        }
+      }
+      room.bullets.splice(i, 1);
     }
   }
 
@@ -276,10 +391,12 @@ function tick(room) {
       hp:p.hp, lives:p.lives, maxHp:C.HP_PER_LIFE,
       ammo:p.ammo, maxAmmo:C.MAG_SIZE,
       reloading:p.reloading, reloadEndsAt:p.reloadEndsAt,
+      rockets:p.rockets,
       alive:p.alive, kills:p.kills,
     })),
-    bullets: room.bullets.map(b=>({x:b.x,y:b.y})),
-    hearts:  room.hearts.map(h=>({x:h.x,y:h.y})),
+    bullets: room.bullets.map(b=>({x:b.x, y:b.y, type:b.type||'bullet', angle:b.angle})),
+    hearts:  room.hearts.map(h=>({x:h.x, y:h.y})),
+    rocketPickups: room.rocketPickups.map(r=>({x:r.x, y:r.y})),
   });
   checkRoundOver(room);
 }
