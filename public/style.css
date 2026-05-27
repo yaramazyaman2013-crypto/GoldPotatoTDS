@@ -341,3 +341,11 @@ canvas { image-rendering: pixelated; display: block; }
   box-shadow: 4px 4px 0 #000; pointer-events: auto;
 }
 .ability-btn.ready { background: #ffd24a; color: #2a1a00; }
+
+/* BRUSH PICKER */
+.brush-picker { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0; }
+.brush-btn { display: flex; align-items: center; gap: 6px; font-size: 9px; padding: 6px 10px; }
+.brush-btn.selected { box-shadow: 4px 4px 0 #8a4a00, 0 0 0 3px #4ad2c2; }
+.brush-swatch {
+  width: 14px; height: 14px; border: 2px solid #000; display: inline-block;
+}

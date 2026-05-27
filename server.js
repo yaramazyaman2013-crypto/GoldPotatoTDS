@@ -154,13 +154,16 @@ function getMapWalls(mapName) {
   return walls;
 }
 
+const WALL_KINDS = ['stone','wood','brick','mesh'];
+const MESH_HP = 4;
 function sanitizeWalls(walls) {
   const out = [];
   for (const w of walls) {
     if (!w || typeof w.x !== 'number' || typeof w.y !== 'number'
       || typeof w.w !== 'number' || typeof w.h !== 'number') continue;
     if (w.w <= 0 || w.h <= 0 || w.w > 1600 || w.h > 1200) continue;
-    out.push({x: w.x|0, y: w.y|0, w: w.w|0, h: w.h|0});
+    const kind = WALL_KINDS.includes(w.kind) ? w.kind : 'stone';
+    out.push({x: w.x|0, y: w.y|0, w: w.w|0, h: w.h|0, kind});
     if (out.length > 2000) break;
   }
   return out;
@@ -194,7 +197,10 @@ function buildWallIndex(walls) {
 }
 
 function hitsWallList(walls, x, y, r) {
-  // 'walls' parameter retained for back-compat; the room caches its index.
+  return !!findWallHit(walls, x, y, r);
+}
+
+function findWallHit(walls, x, y, r) {
   if (walls.__index) {
     const idx = walls.__index;
     const cx = Math.floor(x / SPATIAL_CELL);
@@ -203,12 +209,21 @@ function hitsWallList(walls, x, y, r) {
       for (let dx = -1; dx <= 1; dx++) {
         const bucket = idx.get((cx+dx) * 65536 + (cy+dy));
         if (!bucket) continue;
-        for (const w of bucket) if (circleRect(x, y, r, w)) return true;
+        for (const w of bucket) if (circleRect(x, y, r, w)) return w;
       }
-    return false;
+    return null;
   }
-  for (const w of walls) if (circleRect(x, y, r, w)) return true;
-  return false;
+  for (const w of walls) if (circleRect(x, y, r, w)) return w;
+  return null;
+}
+
+function breakWall(room, wall) {
+  const i = room.walls.indexOf(wall);
+  if (i >= 0) room.walls.splice(i, 1);
+  Object.defineProperty(room.walls, '__index', {
+    value: buildWallIndex(room.walls), enumerable: false, configurable: true, writable: true,
+  });
+  io.to(room.code).emit('wallBroken', { id: wall.id });
 }
 function randomSpawnIn(walls) {
   for (let i = 0; i < 200; i++) {
@@ -311,8 +326,23 @@ function spawnRocketPickup(room) {
   }
 }
 
+function cloneWalls(src) {
+  // Per-round room copy: mesh walls get hp; assign ids; build spatial index
+  const out = src.map((w, i) => ({
+    id: i + 1, x: w.x, y: w.y, w: w.w, h: w.h,
+    kind: w.kind || 'stone',
+    hp: w.kind === 'mesh' ? MESH_HP : Infinity,
+  }));
+  Object.defineProperty(out, '__index', {
+    value: buildWallIndex(out), enumerable: false, configurable: true, writable: true,
+  });
+  return out;
+}
+
 function startRound(room) {
   room.started = true;
+  // Fresh per-round walls so mesh hp is room-local
+  room.walls = cloneWalls(getMapWalls(room.mapName));
   room.bullets = []; room.hearts = []; room.rocketPickups = [];
   room.turrets = []; room.pets = [];
   room.roundEndsAt = Date.now() + C.ROUND_MS;
@@ -530,9 +560,16 @@ function tick(room) {
       if (isRocket) detonated = true;
       else { room.bullets.splice(i,1); continue; }
     }
-    if (!detonated && hitsWallList(room.walls,b.x, b.y, r)) {
-      if (isRocket) detonated = true;
-      else { room.bullets.splice(i,1); continue; }
+    if (!detonated) {
+      const w = findWallHit(room.walls, b.x, b.y, r);
+      if (w) {
+        if (w.kind === 'mesh' && w.hp !== Infinity) {
+          w.hp -= (b.dmg || 1);
+          if (w.hp <= 0) breakWall(room, w);
+        }
+        if (isRocket) detonated = true;
+        else { room.bullets.splice(i,1); continue; }
+      }
     }
 
     if (!detonated) {
