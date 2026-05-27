@@ -159,12 +159,10 @@ const AUD = {
 
 function startAudioOnGesture() {
   AUD.ensure(); AUD.resume();
-  if (!AUD.started) {
-    AUD.started = true;
-    // Start HTML5 background music on first user gesture
-    if (bgMusic && !bgMusic.muted) {
-      bgMusic.play().catch(() => {}); // browsers may block autoplay — ignore
-    }
+  if (!AUD.started) { AUD.started = true; }
+  // Keep trying until the browser lets us play (policy: must be after gesture)
+  if (bgMusic && bgMusic.paused && !bgMusic.muted) {
+    bgMusic.play().catch(() => {});
   }
 }
 document.addEventListener('click', startAudioOnGesture);
@@ -260,26 +258,39 @@ function drawRobot(ctx, ox, oy, scale, color) {
   ctx.restore();
 }
 
+// Cache robot body sprites per color. Each is drawn once to an offscreen
+// canvas; the render loop then does a single drawImage + rotate instead
+// of 15+ fillRect calls + ctx.ellipse per player per frame.
+const _robotBodyCache = new Map();
+const _ROBOT_CX = 22, _ROBOT_CY = 20, _ROBOT_CW = 50, _ROBOT_CH = 40;
+function getRobotBody(color) {
+  if (_robotBodyCache.has(color)) return _robotBodyCache.get(color);
+  const cv = document.createElement('canvas');
+  cv.width = _ROBOT_CW; cv.height = _ROBOT_CH;
+  const c = cv.getContext('2d');
+  c.imageSmoothingEnabled = false;
+  const r = 14, cx = _ROBOT_CX, cy = _ROBOT_CY;
+  c.fillStyle = '#0a0a0a'; c.fillRect(cx-r, cy-r+2, r*2, r*2-4);
+  c.fillStyle = color;     c.fillRect(cx-r+2, cy-r+4, r*2-4, r*2-8);
+  c.fillStyle = '#1a1a2a'; c.fillRect(cx, cy-r/2, r-2, r);
+  c.fillStyle = '#7afcff'; c.fillRect(cx+r-8, cy-3, 2, 2); c.fillRect(cx+r-8, cy+1, 2, 2);
+  c.fillStyle = '#ff3050'; c.fillRect(cx-r-2, cy-1, 3, 3);
+  c.fillStyle = '#222';    c.fillRect(cx+r-2, cy-2, 14, 4);
+  c.fillStyle = '#555';    c.fillRect(cx+r-2, cy-3, 4, 6);
+  c.fillStyle = '#ffd24a'; c.fillRect(cx+r+8, cy-1, 4, 2);
+  _robotBodyCache.set(color, cv);
+  return cv;
+}
+
 function drawRobotTopDown(ctx, x, y, color, angle, alive=true) {
-  const r = 14;
-  ctx.save(); ctx.translate(x, y);
-  ctx.fillStyle = 'rgba(0,0,0,0.4)';
-  ctx.beginPath(); ctx.ellipse(2, 4, r+2, r/2, 0, 0, Math.PI*2); ctx.fill();
+  ctx.save();
+  ctx.translate(Math.floor(x), Math.floor(y));
+  // cheap shadow rectangle (avoids expensive ctx.ellipse + beginPath)
+  ctx.fillStyle = 'rgba(0,0,0,0.38)';
+  ctx.fillRect(-18, -6, 36, 10);
   if (!alive) ctx.globalAlpha = 0.35;
   ctx.rotate(angle);
-  function rect(cx, cy, cw, ch, col) {
-    ctx.fillStyle = col;
-    ctx.fillRect(Math.floor(cx), Math.floor(cy), cw, ch);
-  }
-  rect(-r, -r+2, r*2, r*2-4, '#0a0a0a');
-  rect(-r+2, -r+4, r*2-4, r*2-8, color);
-  rect(0, -r/2, r-2, r, '#1a1a2a');
-  rect(r-8, -3, 2, 2, '#7afcff');
-  rect(r-8,  1, 2, 2, '#7afcff');
-  rect(-r-2, -1, 3, 3, '#ff3050');
-  rect(r-2, -2, 14, 4, '#222');
-  rect(r-2, -3, 4, 6, '#555');
-  rect(r+8, -1, 4, 2, '#ffd24a');
+  ctx.drawImage(getRobotBody(color), -_ROBOT_CX, -_ROBOT_CY);
   ctx.restore();
 }
 
@@ -613,15 +624,30 @@ socket.on('wallBroken', ({id}) => {
 // even at 25ms server updates, movement looks 60fps-smooth.
 const interpBuf = { prev: null, prevAt: 0, cur: null, curAt: 0 };
 
+// Render delay: we intentionally look at the world 40ms in the past so we
+// always have two bracketing server snapshots to interpolate between.
+// Without this delay, performance.now() > curAt always → t >= 1 always →
+// interpolation never fires → positions snap every server tick.
+const INTERP_BUFFER_MS = 40;
+
 function getInterpState() {
   if (!interpBuf.cur) return state.serverState;
-  if (!interpBuf.prev || interpBuf.curAt <= interpBuf.prevAt) return interpBuf.cur;
+  if (!interpBuf.prev) return interpBuf.cur;
   const dt = interpBuf.curAt - interpBuf.prevAt;
-  const t = Math.min(1, (performance.now() - interpBuf.prevAt) / dt);
+  if (dt <= 0) return interpBuf.cur;
+  // renderTime is 40ms behind "now" so it falls between prev and cur
+  const renderTime = performance.now() - INTERP_BUFFER_MS;
+  const t = (renderTime - interpBuf.prevAt) / dt;
+  if (t <= 0) return interpBuf.prev;
   if (t >= 1) return interpBuf.cur;
-  // Build a lightweight interpolated snapshot
+  // Fast lookup map — avoids O(n²) find() per frame
+  if (!interpBuf._prevMap) {
+    interpBuf._prevMap = new Map();
+    for (const p of interpBuf.prev.players) interpBuf._prevMap.set(p.id, p);
+  }
+  const prevMap = interpBuf._prevMap;
   const players = interpBuf.cur.players.map(cp => {
-    const pp = interpBuf.prev.players.find(p => p.id === cp.id);
+    const pp = prevMap.get(cp.id);
     if (!pp || !pp.alive || !cp.alive) return cp;
     return {
       ...cp,
@@ -634,9 +660,10 @@ function getInterpState() {
 
 let lastAmmo = null, wasReloading = false, lastRocketCount = 0;
 socket.on('state', (s) => {
-  // Advance interpolation buffer
+  // Advance interpolation buffer; clear cached prevMap so it rebuilds next frame
   interpBuf.prev = interpBuf.cur;
   interpBuf.prevAt = interpBuf.curAt;
+  interpBuf._prevMap = null;
   interpBuf.cur = s;
   interpBuf.curAt = performance.now();
 
@@ -962,11 +989,12 @@ function render() {
   gctx.fillStyle = '#0a0a14';
   gctx.fillRect(0, 0, W, H);
   if (groundCache) {
-    // Clamp source rect to the cached image so drawImage doesn't smear edges
-    const srcX = Math.max(0, camX), srcY = Math.max(0, camY);
+    // Integer camera coords for pixel-perfect blit (avoids sub-pixel blur)
+    const icx = Math.floor(camX), icy = Math.floor(camY);
+    const srcX = Math.max(0, icx), srcY = Math.max(0, icy);
     const srcW = Math.min(W, state.mapW - srcX);
     const srcH = Math.min(H, state.mapH - srcY);
-    const dstX = srcX - camX, dstY = srcY - camY;
+    const dstX = srcX - icx, dstY = srcY - icy;
     if (srcW > 0 && srcH > 0) {
       gctx.drawImage(groundCache, srcX, srcY, srcW, srcH, dstX, dstY, srcW, srcH);
     }
