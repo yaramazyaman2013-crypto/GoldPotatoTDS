@@ -8,6 +8,20 @@ const { Server } = require('socket.io');
 const path    = require('path');
 const fs      = require('fs');
 
+// Supabase persistence (optional — falls back to local file if env not set)
+let supabase = null;
+try {
+  if (process.env.SUPABASE_URL && process.env.SUPABASE_KEY) {
+    const { createClient } = require('@supabase/supabase-js');
+    supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY, {
+      auth: { persistSession: false },
+    });
+    console.log('[supabase] configured');
+  }
+} catch (e) {
+  console.warn('[supabase] init failed:', e.message);
+}
+
 const app    = express();
 const server = http.createServer(app);
 const io     = new Server(server, {
@@ -140,6 +154,7 @@ const MAPS_FILE = process.env.MAPS_FILE || path.join(process.env.DATA_DIR || __d
 const savedMaps = new Map();
 savedMaps.set('default', DEFAULT_WALLS);
 
+// File-backed fallback used when Supabase isn't configured.
 function loadMapsFromDisk() {
   try {
     if (!fs.existsSync(MAPS_FILE)) return;
@@ -153,7 +168,7 @@ function loadMapsFromDisk() {
     console.warn('[maps] load failed:', e.message);
   }
 }
-function persistMaps() {
+function persistMapsToDisk() {
   try {
     const obj = {};
     for (const [name, walls] of savedMaps) {
@@ -164,6 +179,54 @@ function persistMaps() {
   } catch (e) {
     console.warn('[maps] save failed:', e.message);
   }
+}
+
+// Supabase-backed storage. Table schema (run once in Supabase SQL editor):
+//   create table maps (
+//     name        text primary key,
+//     walls       jsonb not null,
+//     updated_at  timestamptz default now()
+//   );
+//   alter table maps enable row level security;
+//   create policy "all" on maps for all using (true) with check (true);
+async function loadMapsFromSupabase() {
+  if (!supabase) return false;
+  const { data, error } = await supabase.from('maps').select('name, walls');
+  if (error) { console.warn('[supabase] load:', error.message); return false; }
+  for (const row of (data || [])) {
+    if (row.name === 'default') continue;
+    if (Array.isArray(row.walls)) savedMaps.set(row.name, sanitizeWalls(row.walls));
+  }
+  console.log('[supabase] loaded', (data||[]).length, 'maps');
+  return true;
+}
+async function saveMapSupabase(name, walls) {
+  if (!supabase) return;
+  const { error } = await supabase.from('maps').upsert({
+    name, walls, updated_at: new Date().toISOString(),
+  });
+  if (error) console.warn('[supabase] save:', error.message);
+}
+async function deleteMapSupabase(name) {
+  if (!supabase) return;
+  const { error } = await supabase.from('maps').delete().eq('name', name);
+  if (error) console.warn('[supabase] delete:', error.message);
+}
+
+async function persistMap(name, walls) {
+  if (supabase) return saveMapSupabase(name, walls);
+  return persistMapsToDisk();
+}
+async function unpersistMap(name) {
+  if (supabase) return deleteMapSupabase(name);
+  return persistMapsToDisk();
+}
+async function loadMaps() {
+  if (supabase) {
+    const ok = await loadMapsFromSupabase();
+    if (ok) return;
+  }
+  loadMapsFromDisk();
 }
 
 function getMapWalls(mapName) {
@@ -682,19 +745,20 @@ io.on('connection', (socket) => {
   });
 
   // Map editor: save custom map, list maps, delete
-  socket.on('saveMap', ({name, walls}, ack) => {
+  socket.on('saveMap', async ({name, walls}, ack) => {
     if (!name || !Array.isArray(walls)) return ack && ack({ok:false, error:'bad input'});
     const safeName = String(name).slice(0,32).trim();
     if (!safeName || safeName === 'default') return ack && ack({ok:false, error:'isim ayrılmış'});
-    savedMaps.set(safeName, sanitizeWalls(walls));
-    persistMaps();
+    const safeWalls = sanitizeWalls(walls);
+    savedMaps.set(safeName, safeWalls);
+    try { await persistMap(safeName, safeWalls); } catch(e) { console.warn('persistMap', e); }
     ack && ack({ok:true});
     io.emit('mapsUpdated', { names: [...savedMaps.keys()] });
   });
-  socket.on('deleteMap', ({name}, ack) => {
+  socket.on('deleteMap', async ({name}, ack) => {
     if (!name || name === 'default') return ack && ack({ok:false, error:'silinmez'});
     if (savedMaps.delete(name)) {
-      persistMaps();
+      try { await unpersistMap(name); } catch(e) { console.warn('unpersistMap', e); }
       io.emit('mapsUpdated', { names: [...savedMaps.keys()] });
     }
     ack && ack({ok:true});
@@ -785,6 +849,7 @@ function leaveCurrentRoom(socket) {
 // ============================================================
 // START
 // ============================================================
-loadMapsFromDisk();
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log('Gold Wave server on port ' + PORT));
+loadMaps().finally(() => {
+  server.listen(PORT, () => console.log('Gold Wave server on port ' + PORT));
+});
