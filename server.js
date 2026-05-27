@@ -21,6 +21,9 @@ const BULLET_SPEED = 9;
 const PLAYER_R = 14;
 const BULLET_R = 3;
 const FIRE_COOLDOWN = 90;
+const HP_PER_LIFE = 10;
+const START_LIVES = 3;
+const MAX_LIVES = 5;
 
 // American-office-style map: walls (desks/cubicles) as rectangles
 function buildWalls() {
@@ -142,7 +145,8 @@ function startRound(room) {
   for (const p of room.players.values()) {
     const s = randomSpawn();
     p.x = s.x; p.y = s.y;
-    p.hp = 3;
+    p.hp = HP_PER_LIFE;
+    p.lives = START_LIVES;
     p.alive = true;
     p.kills = 0;
     p.angle = 0;
@@ -200,7 +204,7 @@ io.on('connection', (socket) => {
   socket.on('createRoom', ({ name, color }, cb) => {
     const room = createRoom(socket.id);
     joinRoomInternal(socket, room, name, color);
-    cb({ ok: true, roomId: room.id, ownerId: room.ownerId });
+    cb({ ok: true, roomId: room.id, ownerId: room.ownerId, room: publicRoom(room) });
   });
 
   socket.on('joinRoom', ({ roomId, name, color }, cb) => {
@@ -209,7 +213,7 @@ io.on('connection', (socket) => {
     if (room.started) return cb({ ok: false, error: 'Oyun başladı' });
     if (room.players.size >= MAX_PLAYERS) return cb({ ok: false, error: 'Oda dolu' });
     joinRoomInternal(socket, room, name, color);
-    cb({ ok: true, roomId: room.id, ownerId: room.ownerId });
+    cb({ ok: true, roomId: room.id, ownerId: room.ownerId, room: publicRoom(room) });
   });
 
   function joinRoomInternal(socket, room, name, color) {
@@ -220,7 +224,8 @@ io.on('connection', (socket) => {
       color: color || '#ff5577',
       x: s.x, y: s.y,
       angle: 0,
-      hp: 3,
+      hp: HP_PER_LIFE,
+      lives: START_LIVES,
       alive: true,
       kills: 0,
       keys: { w: false, a: false, s: false, d: false },
@@ -332,12 +337,12 @@ setInterval(() => {
           life: 80,
         });
       }
-      // pick up hearts
+      // pick up hearts (add a life)
       for (let i = room.hearts.length - 1; i >= 0; i--) {
         const h = room.hearts[i];
         if ((h.x - p.x) ** 2 + (h.y - p.y) ** 2 < (PLAYER_R + 10) ** 2) {
-          if (p.hp < 5) {
-            p.hp = Math.min(5, p.hp + 1);
+          if (p.lives < MAX_LIVES) {
+            p.lives += 1;
             room.hearts.splice(i, 1);
           }
         }
@@ -358,10 +363,17 @@ setInterval(() => {
           p.hp -= 1;
           room.bullets.splice(i, 1);
           if (p.hp <= 0) {
-            p.alive = false;
+            p.lives -= 1;
             const killer = room.players.get(b.owner);
             if (killer) killer.kills += 1;
             io.to(room.id).emit('kill', { killer: killer ? killer.name : '?', victim: p.name });
+            if (p.lives <= 0) {
+              p.alive = false;
+            } else {
+              // respawn at safe random spot, full HP
+              const s = randomSpawn();
+              p.x = s.x; p.y = s.y; p.hp = HP_PER_LIFE;
+            }
           }
           break;
         }
@@ -375,7 +387,8 @@ setInterval(() => {
       players: [...room.players.values()].map(p => ({
         id: p.id, name: p.name, color: p.color,
         x: p.x, y: p.y, angle: p.angle,
-        hp: p.hp, alive: p.alive, kills: p.kills,
+        hp: p.hp, lives: p.lives, maxHp: HP_PER_LIFE,
+        alive: p.alive, kills: p.kills,
       })),
       bullets: room.bullets.map(b => ({ x: b.x, y: b.y })),
       hearts: room.hearts.map(h => ({ x: h.x, y: h.y })),
