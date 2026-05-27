@@ -28,16 +28,32 @@ canvas { image-rendering: pixelated; display: block; }
   align-items: stretch;
 }
 .menu-left {
-  padding: 60px 60px;
+  padding: 48px 60px 36px;
   display: flex; flex-direction: column; gap: 24px; align-items: flex-start;
+  height: 100%;
+}
+.menu-map-wrap {
+  margin-top: auto;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.menu-map-label {
+  font-size: 10px; color: #8a7aa6; letter-spacing: 2px;
+}
+#menuMinimap {
+  width: 380px; height: 285px;
+  background: #0a0e10;
+  border: 4px solid #ffd24a;
+  box-shadow: 6px 6px 0 #000;
+  image-rendering: pixelated;
+  display: block;
 }
 .title {
-  font-size: 42px;
+  font-size: 64px;
   line-height: 1.2;
-  margin: 0 0 30px 0;
+  margin: 0 0 40px 0;
   color: #ffd24a;
-  text-shadow: 4px 4px 0 #8a4a00, 8px 8px 0 #000;
-  letter-spacing: 2px;
+  text-shadow: 5px 5px 0 #8a4a00, 10px 10px 0 #000;
+  letter-spacing: 3px;
 }
 .title span { color: #ff8a3c; }
 .title-sm {
@@ -49,12 +65,12 @@ canvas { image-rendering: pixelated; display: block; }
   background: #ffd24a;
   color: #2a1a00;
   border: none;
-  padding: 18px 28px;
+  padding: 26px 44px;
   font-family: inherit;
-  font-size: 16px;
+  font-size: 24px;
   cursor: pointer;
-  box-shadow: 4px 4px 0 #8a4a00, 0 0 0 4px #2a1a00 inset;
-  letter-spacing: 2px;
+  box-shadow: 5px 5px 0 #8a4a00, 0 0 0 4px #2a1a00 inset;
+  letter-spacing: 3px;
 }
 .pixel-btn:hover { background: #ffe070; }
 .pixel-btn:active { transform: translate(2px, 2px); box-shadow: 2px 2px 0 #8a4a00, 0 0 0 4px #2a1a00 inset; }
@@ -62,6 +78,7 @@ canvas { image-rendering: pixelated; display: block; }
 
 .menu-top-right {
   position: absolute; top: 20px; right: 24px;
+  z-index: 20;
 }
 #nameInput {
   font-family: inherit;
@@ -98,18 +115,20 @@ canvas { image-rendering: pixelated; display: block; }
 #shirtIcon { width: 60px; height: 60px; }
 .palette {
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  gap: 8px;
-  padding: 12px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  padding: 14px;
   background: #2a1f44;
   border: 4px solid #ffd24a;
   position: absolute;
-  bottom: 0;
-  max-width: 380px;
+  bottom: 10px;
+  z-index: 15;
 }
 .palette canvas {
-  width: 40px; height: 50px; cursor: pointer;
+  width: 56px; height: 70px; cursor: pointer;
   border: 2px solid transparent;
+  background: #1a1428;
+  image-rendering: pixelated;
 }
 .palette canvas.selected { border-color: #ffd24a; }
 
@@ -155,6 +174,9 @@ canvas { image-rendering: pixelated; display: block; }
 }
 .player-chip .swatch { width: 16px; height: 16px; border: 2px solid #000; }
 .hint { color: #8a7aa6; font-size: 10px; }
+.lang-row { display: flex; align-items: center; gap: 10px; }
+.lang-btn { padding: 8px 14px !important; font-size: 12px !important; }
+.active-lang { background: #ff8a3c !important; box-shadow: 3px 3px 0 #8a4a00, 0 0 0 3px #2a1a00 inset !important; }
 
 /* GAME */
 #game { background: #000; }
@@ -193,6 +215,20 @@ canvas { image-rendering: pixelated; display: block; }
   background: linear-gradient(to right, #ff3050, #ff6080);
   transition: width 0.15s;
 }
+.ammo {
+  position: absolute;
+  bottom: 24px; right: 24px;
+  background: rgba(10,10,20,0.85);
+  border: 3px solid #ffd24a;
+  padding: 10px 16px;
+  font-size: 20px;
+  color: #ffd24a;
+  min-width: 110px;
+  text-align: center;
+  letter-spacing: 2px;
+}
+.ammo.reloading { color: #ff8a3c; }
+.ammo .max { color: #8a7a3a; font-size: 14px; }
 .killfeed {
   position: absolute; top: 100px; right: 16px;
   display: flex; flex-direction: column; gap: 4px;
