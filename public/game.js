@@ -172,8 +172,9 @@ function makeRoomCode() {
   return s;
 }
 
-// PeerJS broker config. Explicit so both host and joiner hit the
-// exact same broker (avoids cross-shard "unknown peer" issues).
+// PeerJS broker + ICE config. Explicit broker so host and joiner
+// hit the same server. Multiple STUN + free TURN relays so peers
+// behind symmetric NAT (most home routers) can still connect.
 const PEER_CONFIG = {
   host: '0.peerjs.com',
   port: 443,
@@ -183,8 +184,26 @@ const PEER_CONFIG = {
   config: {
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:global.stun.twilio.com:3478' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' },
+      // Free TURN relays (handle strict NAT). Open / community.
+      {
+        urls: 'turn:openrelay.metered.ca:80',
+        username: 'openrelayproject',
+        credential: 'openrelayproject',
+      },
+      {
+        urls: 'turn:openrelay.metered.ca:443',
+        username: 'openrelayproject',
+        credential: 'openrelayproject',
+      },
+      {
+        urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+        username: 'openrelayproject',
+        credential: 'openrelayproject',
+      },
     ],
+    iceTransportPolicy: 'all',
   },
 };
 const PEER_PREFIX = 'goldwave';
@@ -393,6 +412,21 @@ const Net = {
       conn.on('open', () => {
         openedAt = Date.now();
         console.log('[Net] data channel open');
+        // Log underlying RTCPeerConnection state to diagnose NAT issues
+        try {
+          const pc = conn.peerConnection;
+          if (pc) {
+            console.log('[Net] connectionState=', pc.connectionState,
+              'iceConnectionState=', pc.iceConnectionState,
+              'iceGatheringState=', pc.iceGatheringState);
+            pc.oniceconnectionstatechange = () => {
+              console.log('[Net] iceConnectionState ->', pc.iceConnectionState);
+            };
+            pc.onconnectionstatechange = () => {
+              console.log('[Net] connectionState ->', pc.connectionState);
+            };
+          }
+        } catch (e) {}
         setNetStatus('Bilgi gonderiliyor...');
         conn.send({ kind: 'joinPlayer', name, color });
       });
