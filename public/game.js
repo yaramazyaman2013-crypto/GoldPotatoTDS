@@ -201,7 +201,7 @@ const state = {
 
 const CLASS_INFO = {
   cyber:    { label: 'CYBER',    desc: 'Her 2.5dk +1 füze',          color: '#7afcff' },
-  engineer: { label: 'MUHENDIS', desc: '3dk: Taret koy (B tuşu)',    color: '#ffd24a' },
+  engineer: { label: 'MUHENDIS', desc: '3dk: Taret koy (B tuşu)',    color: '#4a8aff' },
   medic:    { label: 'DOKTOR',   desc: '3.5dk: Heal pet (V tuşu)',   color: '#7ad24a' },
   tank:     { label: 'TANK',     desc: '5 kill → 20sn tank modu',    color: '#ff5577' },
 };
