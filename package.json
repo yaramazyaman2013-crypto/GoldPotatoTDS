@@ -1,0 +1,13 @@
+{
+  "name": "goldpotato-tds",
+  "version": "1.0.0",
+  "description": "Browser-based multiplayer top-down shooter with pixel graphics",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  }
+}
