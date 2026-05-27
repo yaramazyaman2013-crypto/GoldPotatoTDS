@@ -351,11 +351,19 @@ function setConnecting(v) {
   $('btnJoinCode').disabled = v;
 }
 
-$('btnCreateRoom').addEventListener('click', () => {
+$('btnCreateRoom').addEventListener('click', async () => {
   if (connecting) return;
   setConnecting(true);
   setNetStatus(I18N[currentLang].connecting);
-  socket.emit('createRoom', { name: state.name, color: state.color, cls: state.cls, mapName: state.mapName }, (res) => {
+  const payload = { name: state.name, color: state.color, cls: state.cls, mapName: state.mapName };
+  // Custom map: fetch walls from Supabase and ship them inline so server knows them
+  if (state.mapName && state.mapName !== 'default') {
+    try {
+      const walls = await sbGetMap(state.mapName);
+      if (Array.isArray(walls)) payload.customMap = walls;
+    } catch (e) { console.warn('[maps] getMap failed:', e.message); }
+  }
+  socket.emit('createRoom', payload, (res) => {
     setConnecting(false);
     setNetStatus('');
     if (res && res.ok) {
@@ -978,25 +986,57 @@ function renderClassPicker() {
 renderClassPicker();
 
 // ============================================================
-// MAP PICKER + EDITOR (server-backed: shared list for all players)
+// MAP PICKER + EDITOR (browser ↔ Supabase REST; shared across all clients)
 // ============================================================
-let serverMaps = ['default'];
+const SB = window.SUPABASE_CONFIG || {};
+const SB_HEADERS = {
+  'apikey': SB.key,
+  'Authorization': 'Bearer ' + SB.key,
+  'Content-Type': 'application/json',
+};
 
-function refreshMapsFromServer() {
-  socket.emit('listMaps', (res) => {
-    if (res && res.ok) {
-      serverMaps = res.names;
-      if (!serverMaps.includes(state.mapName)) state.mapName = 'default';
-      renderMapList();
-    }
-  });
+async function sbListMaps() {
+  const r = await fetch(`${SB.url}/rest/v1/maps?select=name&order=name`, { headers: SB_HEADERS });
+  if (!r.ok) throw new Error('list ' + r.status);
+  return (await r.json()).map(row => row.name);
 }
-socket.on('mapsUpdated', ({names}) => {
-  serverMaps = names;
-  renderMapList();
-});
-// fetch initial list once connected
-socket.on('connect', refreshMapsFromServer);
+async function sbGetMap(name) {
+  const r = await fetch(`${SB.url}/rest/v1/maps?name=eq.${encodeURIComponent(name)}&select=walls`, { headers: SB_HEADERS });
+  if (!r.ok) throw new Error('get ' + r.status);
+  const rows = await r.json();
+  return rows[0] ? rows[0].walls : null;
+}
+async function sbSaveMap(name, walls) {
+  const r = await fetch(`${SB.url}/rest/v1/maps`, {
+    method: 'POST',
+    headers: {...SB_HEADERS, 'Prefer': 'resolution=merge-duplicates,return=minimal'},
+    body: JSON.stringify({ name, walls }),
+  });
+  if (!r.ok) throw new Error('save ' + r.status + ' ' + (await r.text()));
+}
+async function sbDeleteMap(name) {
+  const r = await fetch(`${SB.url}/rest/v1/maps?name=eq.${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+    headers: SB_HEADERS,
+  });
+  if (!r.ok) throw new Error('delete ' + r.status);
+}
+
+let serverMaps = ['default'];
+async function refreshMapsFromSupabase() {
+  try {
+    const names = await sbListMaps();
+    serverMaps = ['default', ...names.filter(n => n !== 'default')];
+    if (!serverMaps.includes(state.mapName)) state.mapName = 'default';
+    renderMapList();
+  } catch (e) {
+    console.warn('[maps] list failed:', e.message);
+  }
+}
+// Server relays a hint when someone else saves/deletes — refetch the list.
+socket.on('mapsUpdated', () => { refreshMapsFromSupabase(); });
+// Initial load (independent of socket connection).
+refreshMapsFromSupabase();
 
 function renderMapList() {
   const root = $('mapList');
@@ -1055,13 +1095,13 @@ function openEditor(name) {
     show('editor'); drawEditor();
   }
   if (name && name !== 'default' && serverMaps.includes(name)) {
-    socket.emit('getMap', {name}, (res) => {
-      if (res && res.ok) {
-        EDITOR.grid = wallsToGrid(res.walls);
+    sbGetMap(name).then(walls => {
+      if (Array.isArray(walls)) {
+        EDITOR.grid = wallsToGrid(walls);
         $('editorName').value = name;
         show('editor'); drawEditor();
       } else withBlank();
-    });
+    }).catch(() => withBlank());
   } else {
     withBlank();
   }
@@ -1120,31 +1160,35 @@ if (btnEditMap) btnEditMap.addEventListener('click', () => openEditor(state.mapN
 const btnClearEditor = $('btnClearEditor');
 if (btnClearEditor) btnClearEditor.addEventListener('click', () => { EDITOR.grid = newGrid(); drawEditor(); });
 const btnSaveMap = $('btnSaveMap');
-if (btnSaveMap) btnSaveMap.addEventListener('click', () => {
+if (btnSaveMap) btnSaveMap.addEventListener('click', async () => {
   const name = ($('editorName').value || '').trim().slice(0, 24);
   if (!name || name === 'default') return alert('Geçerli bir isim gir');
   const walls = gridToWalls(EDITOR.grid);
-  socket.emit('saveMap', {name, walls}, (res) => {
-    if (res && res.ok) {
-      state.mapName = name;
-      refreshMapsFromServer();
-      show('rooms');
-    } else {
-      alert((res && res.error) || 'Kaydedilemedi');
-    }
-  });
+  try {
+    await sbSaveMap(name, walls);
+    state.mapName = name;
+    socket.emit('mapSaved', { name });
+    await refreshMapsFromSupabase();
+    show('rooms');
+  } catch (e) {
+    alert('Kaydedilemedi: ' + e.message);
+  }
 });
 const btnCancelEditor = $('btnCancelEditor');
 if (btnCancelEditor) btnCancelEditor.addEventListener('click', () => show('rooms'));
 const btnDeleteMap = $('btnDeleteMap');
-if (btnDeleteMap) btnDeleteMap.addEventListener('click', () => {
+if (btnDeleteMap) btnDeleteMap.addEventListener('click', async () => {
   const name = ($('editorName').value || '').trim();
   if (!name || name === 'default') return;
-  socket.emit('deleteMap', {name}, () => {
+  try {
+    await sbDeleteMap(name);
     if (state.mapName === name) state.mapName = 'default';
-    refreshMapsFromServer();
+    socket.emit('mapDeleted', { name });
+    await refreshMapsFromSupabase();
     show('rooms');
-  });
+  } catch (e) {
+    alert('Silinemedi: ' + e.message);
+  }
 });
 
 renderMapList();
