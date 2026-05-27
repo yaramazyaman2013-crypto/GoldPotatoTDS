@@ -572,7 +572,16 @@ socket.on('roundStart', (data) => {
   lastAmmo = null; wasReloading = false;
   $('dead').classList.add('hidden');
   $('roundEnd').classList.add('hidden');
+  rebuildGroundCache();
   show('game');
+});
+
+socket.on('wallBroken', ({id}) => {
+  const i = state.walls.findIndex(w => w.id === id);
+  if (i >= 0) {
+    state.walls.splice(i, 1);
+    rebuildGroundCache();
+  }
 });
 
 let lastAmmo = null, wasReloading = false, lastRocketCount = 0;
@@ -698,6 +707,43 @@ function renderHUD() {
   }
 }
 
+function drawWall(ctx, x, y, w, h, kind) {
+  const s = WALL_STYLES[kind] || WALL_STYLES.stone;
+  ctx.fillStyle = s.base; ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = s.light; ctx.fillRect(x, y, w, 3); ctx.fillRect(x, y, 3, h);
+  ctx.fillStyle = s.dark;  ctx.fillRect(x, y+h-3, w, 3); ctx.fillRect(x+w-3, y, 3, h);
+  if (kind === 'brick') {
+    // brick courses
+    ctx.fillStyle = s.dark;
+    for (let by = 10; by < h-2; by += 14) ctx.fillRect(x, y+by, w, 1);
+    for (let by = 0; by < h; by += 14) {
+      const offset = ((by/14)|0) % 2 === 0 ? 0 : 24;
+      for (let bx = offset+12; bx < w-2; bx += 48) ctx.fillRect(x+bx, y+by+1, 1, 12);
+    }
+  } else if (kind === 'wood') {
+    // wood planks (horizontal)
+    ctx.fillStyle = s.dark;
+    for (let by = 10; by < h-2; by += 12) ctx.fillRect(x, y+by, w, 1);
+    // knots
+    ctx.fillStyle = s.dark;
+    for (let bx = 8; bx < w; bx += 28) { ctx.fillRect(x+bx, y+5, 2, 2); }
+  } else if (kind === 'mesh') {
+    // rusty wire mesh — diagonal cross-hatch
+    ctx.fillStyle = '#2a1f10';
+    for (let by = 0; by < h; by += 4) ctx.fillRect(x+3, y+by, w-6, 1);
+    for (let bx = 0; bx < w; bx += 4) ctx.fillRect(x+bx, y+3, 1, h-6);
+    // rust spots
+    ctx.fillStyle = '#7a3a14';
+    for (let bx = 6; bx < w-4; bx += 18) for (let by = 6; by < h-4; by += 18) {
+      ctx.fillRect(x+bx, y+by, 2, 2);
+    }
+  } else {
+    // stone seams
+    ctx.fillStyle = s.dark;
+    for (let bx = 12; bx < w-4; bx += 16) ctx.fillRect(x+bx, y+3, 1, h-6);
+  }
+}
+
 function drawRocketPickup(ctx, x, y) {
   // pixel rocket lying on ground
   ctx.save();
@@ -767,9 +813,49 @@ function drawHeart(ctx, x, y) {
   }
 }
 
+// Offscreen full-map canvas with grass + walls baked in. Built once per
+// round (and on wallBroken). Saves 1000+ rect draws per frame.
+let groundCache = null;
+function rebuildGroundCache() {
+  if (!state.mapW || !state.mapH) return;
+  const cv = document.createElement('canvas');
+  cv.width = state.mapW; cv.height = state.mapH;
+  const c = cv.getContext('2d');
+  c.imageSmoothingEnabled = false;
+  // grass base
+  c.fillStyle = '#4a6a3a';
+  c.fillRect(0, 0, state.mapW, state.mapH);
+  const ts = 32;
+  for (let ty = 0; ty < Math.ceil(state.mapH/ts); ty++) {
+    for (let tx = 0; tx < Math.ceil(state.mapW/ts); tx++) {
+      const hash = ((tx*73856093) ^ (ty*19349663)) >>> 0;
+      const isDirt = (hash % 17) === 0;
+      let col;
+      if (isDirt) col = '#6b4a2a';
+      else col = (tx+ty)%2===0 ? '#4a6a3a' : '#3e5a30';
+      c.fillStyle = col;
+      c.fillRect(tx*ts, ty*ts, ts, ts);
+      if (!isDirt && (hash % 23) === 0) {
+        c.fillStyle = '#6a8a4a';
+        c.fillRect(tx*ts+6, ty*ts+10, 2, 4);
+        c.fillRect(tx*ts+10, ty*ts+8, 2, 6);
+        c.fillRect(tx*ts+14, ty*ts+12, 2, 4);
+      }
+    }
+  }
+  // walls
+  for (const w of state.walls) {
+    drawWall(c, w.x, w.y, w.w, w.h, w.kind || 'stone');
+  }
+  groundCache = cv;
+}
+
 function render() {
   requestAnimationFrame(render);
   if (!state.inGame || !state.serverState) return;
+  // Skip world render when fully occluded (pause/round-end overlay open)
+  if (!$('pauseMenu').classList.contains('hidden')) return;
+  if (!$('roundEnd').classList.contains('hidden')) return;
   const ss = state.serverState;
   const me = ss.players.find(p => p.id === socket.id);
   const W = gameCanvas.width, H = gameCanvas.height;
@@ -781,44 +867,11 @@ function render() {
   if (state.mapH < H) camY = (state.mapH - H)/2;
 
   gctx.imageSmoothingEnabled = false;
-  // grass tile background
-  gctx.fillStyle = '#4a6a3a';
-  gctx.fillRect(0,0,W,H);
-  const ts = 32;
-  const sx = -(camX % ts), sy = -(camY % ts);
-  for (let y = sy; y < H; y += ts) {
-    for (let x = sx; x < W; x += ts) {
-      const tx = Math.floor((x+camX)/ts), ty = Math.floor((y+camY)/ts);
-      // checkered grass shades + occasional dirt patch (deterministic by tile)
-      const hash = ((tx*73856093) ^ (ty*19349663)) >>> 0;
-      const isDirt = (hash % 17) === 0;
-      let col;
-      if (isDirt) col = '#6b4a2a';
-      else col = (tx+ty)%2===0 ? '#4a6a3a' : '#3e5a30';
-      gctx.fillStyle = col;
-      gctx.fillRect(x, y, ts, ts);
-      // grass tuft decoration
-      if (!isDirt && (hash % 23) === 0) {
-        gctx.fillStyle = '#6a8a4a';
-        gctx.fillRect(x+6, y+10, 2, 4);
-        gctx.fillRect(x+10, y+8, 2, 6);
-        gctx.fillRect(x+14, y+12, 2, 4);
-      }
-    }
-  }
-
-  // stone walls
-  for (const w of state.walls) {
-    const x = w.x-camX, y = w.y-camY;
-    if (x+w.w<0||y+w.h<0||x>W||y>H) continue;
-    gctx.fillStyle = '#3a3a4a'; gctx.fillRect(x,y,w.w,w.h);
-    // top/left highlights (lighter stone)
-    gctx.fillStyle = '#6a6a7a'; gctx.fillRect(x,y,w.w,3); gctx.fillRect(x,y,3,w.h);
-    // bottom/right shadow
-    gctx.fillStyle = '#1a1a24'; gctx.fillRect(x,y+w.h-3,w.w,3); gctx.fillRect(x+w.w-3,y,3,w.h);
-    // brick texture: vertical seams
-    gctx.fillStyle = '#2a2a36';
-    for (let bx = 12; bx < w.w-4; bx += 16) gctx.fillRect(x+bx, y+3, 1, w.h-6);
+  // Blit pre-rendered ground+walls (built once per round, rebuilt on wallBroken)
+  if (groundCache) {
+    gctx.drawImage(groundCache, camX, camY, W, H, 0, 0, W, H);
+  } else {
+    gctx.fillStyle = '#4a6a3a'; gctx.fillRect(0,0,W,H);
   }
 
   // hearts and rocket pickups
@@ -1077,36 +1130,45 @@ function renderMapList() {
 }
 
 // ===== Editor =====
+const WALL_STYLES = {
+  stone: { base: '#3a3a4a', light: '#6a6a7a', dark: '#1a1a24', label: 'TAS',  swatch: '#5a5a6a' },
+  wood:  { base: '#6b4220', light: '#a06030', dark: '#3a2010', label: 'AHSAP', swatch: '#8a5a2a' },
+  brick: { base: '#a33c20', light: '#d05a30', dark: '#5a1a10', label: 'TUGLA', swatch: '#c4502a' },
+  mesh:  { base: '#5a4a30', light: '#8a7050', dark: '#2a2018', label: 'TEL',  swatch: '#a08050' },
+};
 const EDITOR = {
-  gridW: 40, gridH: 30, cellSize: 40, // 40*40=1600x1200
-  grid: null, // 2D array boolean
+  gridW: 40, gridH: 30, cellSize: 40,
+  grid: null,            // 2D array: null or kind string
+  brush: 'stone',        // currently selected paint kind, or 'erase'
   active: false,
 };
 function newGrid() {
-  return Array.from({length: EDITOR.gridH}, () => Array(EDITOR.gridW).fill(false));
+  return Array.from({length: EDITOR.gridH}, () => Array(EDITOR.gridW).fill(null));
 }
 // Greedy merge: combine adjacent filled cells into the largest possible
 // rectangles. A fully-filled 40x30 grid becomes ~1 rect instead of 1200,
 // which is huge for both server collision and client rendering.
+// Merge consecutive cells of the same kind only.
 function gridToWalls(grid) {
   const W = EDITOR.gridW, H = EDITOR.gridH, CS = EDITOR.cellSize;
   const used = grid.map(row => row.map(() => false));
   const out = [];
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
-      if (!grid[y][x] || used[y][x]) continue;
+      const kind = grid[y][x];
+      if (!kind || used[y][x]) continue;
       let w = 1;
-      while (x + w < W && grid[y][x+w] && !used[y][x+w]) w++;
+      while (x + w < W && grid[y][x+w] === kind && !used[y][x+w]) w++;
       let h = 1;
       outer: while (y + h < H) {
         for (let xx = 0; xx < w; xx++) {
-          if (!grid[y+h][x+xx] || used[y+h][x+xx]) break outer;
+          if (grid[y+h][x+xx] !== kind || used[y+h][x+xx]) break outer;
         }
         h++;
       }
       for (let yy = 0; yy < h; yy++)
         for (let xx = 0; xx < w; xx++) used[y+yy][x+xx] = true;
-      out.push({x: x*CS, y: y*CS, w: w*CS, h: h*CS});
+      out.push({x: x*CS, y: y*CS, w: w*CS, h: h*CS, kind});
     }
   }
   return out;
@@ -1159,12 +1221,14 @@ function drawEditor() {
   ctx.strokeStyle = 'rgba(0,0,0,0.25)';
   for (let x = 0; x <= EDITOR.gridW; x++) { ctx.beginPath(); ctx.moveTo(x*cs,0); ctx.lineTo(x*cs,cv.height); ctx.stroke(); }
   for (let y = 0; y <= EDITOR.gridH; y++) { ctx.beginPath(); ctx.moveTo(0,y*cs); ctx.lineTo(cv.width,y*cs); ctx.stroke(); }
-  // walls
+  // walls — per cell by kind
   for (let y = 0; y < EDITOR.gridH; y++) for (let x = 0; x < EDITOR.gridW; x++) {
-    if (!EDITOR.grid[y][x]) continue;
-    ctx.fillStyle = '#3a3a4a'; ctx.fillRect(x*cs, y*cs, cs, cs);
-    ctx.fillStyle = '#6a6a7a'; ctx.fillRect(x*cs, y*cs, cs, 2);
-    ctx.fillStyle = '#1a1a24'; ctx.fillRect(x*cs, y*cs+cs-2, cs, 2);
+    const kind = EDITOR.grid[y][x];
+    if (!kind) continue;
+    const s = WALL_STYLES[kind] || WALL_STYLES.stone;
+    ctx.fillStyle = s.base;  ctx.fillRect(x*cs, y*cs, cs, cs);
+    ctx.fillStyle = s.light; ctx.fillRect(x*cs, y*cs, cs, 2);
+    ctx.fillStyle = s.dark;  ctx.fillRect(x*cs, y*cs+cs-2, cs, 2);
   }
 }
 
@@ -1183,14 +1247,18 @@ function drawEditor() {
   }
   cv.addEventListener('pointerdown', (e) => {
     const c = cellAt(e); if (!c) return;
-    dragMode = !EDITOR.grid[c.y][c.x];
+    const target = EDITOR.brush === 'erase' ? null : EDITOR.brush;
+    // If clicking an existing cell of same kind → erase that path; else paint
+    if (target === null) dragMode = null;
+    else if (EDITOR.grid[c.y][c.x] === target) dragMode = null;
+    else dragMode = target;
     EDITOR.grid[c.y][c.x] = dragMode;
     drawEditor();
     cv.setPointerCapture(e.pointerId);
     e.preventDefault();
   });
   cv.addEventListener('pointermove', (e) => {
-    if (dragMode === null) return;
+    if (e.buttons === 0) return;
     const c = cellAt(e); if (!c) return;
     if (EDITOR.grid[c.y][c.x] !== dragMode) {
       EDITOR.grid[c.y][c.x] = dragMode;
@@ -1203,6 +1271,26 @@ function drawEditor() {
   cv.addEventListener('lostpointercapture', endDrag);
   cv.addEventListener('contextmenu', e => e.preventDefault());
 })();
+
+function renderBrushPicker() {
+  const root = $('brushPicker');
+  if (!root) return;
+  root.innerHTML = '';
+  for (const kind of ['stone','wood','brick','mesh','erase']) {
+    const b = document.createElement('button');
+    b.className = 'pixel-btn small brush-btn';
+    if (kind === 'erase') {
+      b.textContent = 'SIL';
+    } else {
+      const s = WALL_STYLES[kind];
+      b.innerHTML = `<span class="brush-swatch" style="background:${s.swatch}"></span> ${s.label}`;
+    }
+    if (EDITOR.brush === kind) b.classList.add('selected');
+    b.addEventListener('click', () => { EDITOR.brush = kind; renderBrushPicker(); });
+    root.appendChild(b);
+  }
+}
+renderBrushPicker();
 
 const btnEditMap = $('btnEditMap');
 if (btnEditMap) btnEditMap.addEventListener('click', () => openEditor(state.mapName !== 'default' ? state.mapName : null));
