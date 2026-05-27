@@ -10,7 +10,7 @@
 <div id="menu" class="screen">
   <div class="menu-left">
     <h1 class="title">GOLD<span>WAVE</span></h1>
-    <button id="btnPlay" class="pixel-btn" data-i18n="play">PLAY</button>
+    <button id="btnPlay" class="pixel-btn" data-i18n="play">OYNA</button>
     <button id="btnSettings" class="pixel-btn" data-i18n="settings">AYARLAR</button>
     <div class="menu-map-wrap">
       <div class="menu-map-label">MAP PREVIEW</div>
@@ -36,10 +36,10 @@
     <button id="btnBack1" class="pixel-btn small" data-i18n="back">GERI</button>
     <button id="btnCreateRoom" class="pixel-btn" data-i18n="createRoom">ODA OLUSTUR</button>
     <div class="join-row">
-      <input id="joinCode" data-i18n-ph="roomCode" placeholder="ODA KODU" maxlength="6"/>
+      <input id="joinCode" data-i18n-ph="roomCode" placeholder="ODA KODU" maxlength="5"/>
       <button id="btnJoinCode" class="pixel-btn" data-i18n="join">KATIL</button>
     </div>
-    <div class="hint" data-i18n="codeHint">Oda kodunu host paylasmali. Hicbir oyuncu sunucu kurmaz; tarayicilar birbirine baglanir (WebRTC).</div>
+    <div class="hint" data-i18n="codeHint">Oda kodunu arkadaşına ver, o da KATIL butonuyla bağlansın.</div>
     <div id="netStatus" class="hint"></div>
   </div>
 </div>
@@ -48,7 +48,7 @@
 <div id="lobby" class="screen hidden">
   <div class="panel">
     <h2 class="title-sm" data-i18n="lobby">LOBI</h2>
-    <div><span data-i18n="roomCode2">Oda Kodu:</span> <span id="lobbyCode" style="font-size: 22px; color: #ffd24a; letter-spacing: 4px;"></span></div>
+    <div><span data-i18n="roomCode2">Oda Kodu:</span> <span id="lobbyCode" style="font-size:22px;color:#ffd24a;letter-spacing:4px;"></span></div>
     <div id="lobbyStatus" class="hint"></div>
     <div id="lobbyPlayers" class="lobby-players"></div>
     <button id="btnStart" class="pixel-btn hidden" data-i18n="start">BASLAT</button>
@@ -107,8 +107,7 @@
   </div>
 </div>
 
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-<script src="peer-host.js"></script>
+<script src="/socket.io/socket.io.js"></script>
 <script src="game.js"></script>
 </body>
 </html>

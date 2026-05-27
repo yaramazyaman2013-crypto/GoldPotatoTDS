@@ -11,6 +11,8 @@ const I18N = {
     roundEnd: 'TUR BITTI', nextRound: 'Yeni tur birazdan...',
     eliminated: 'ELENDIN', winner: 'KAZANAN', noWinner: 'KAZANAN YOK',
     kills: 'kill', leaderboard: 'LIDERLIK',
+    codeHint: 'Oda kodunu arkadaşına ver, o da KATIL butonuyla bağlansın.',
+    connecting: 'Bağlanılıyor...',
   },
   en: {
     play: 'PLAY', settings: 'SETTINGS', rooms: 'ROOMS', back: 'BACK',
@@ -23,6 +25,8 @@ const I18N = {
     roundEnd: 'ROUND OVER', nextRound: 'Next round soon...',
     eliminated: 'ELIMINATED', winner: 'WINNER', noWinner: 'NO WINNER',
     kills: 'kills', leaderboard: 'LEADERBOARD',
+    codeHint: 'Share the room code with your friend so they can join.',
+    connecting: 'Connecting...',
   },
 };
 
@@ -32,17 +36,14 @@ function applyLang(lang) {
   currentLang = lang;
   localStorage.setItem('gwLang', lang);
   const dict = I18N[lang];
-  // text nodes
   document.querySelectorAll('[data-i18n]').forEach(el => {
     const key = el.getAttribute('data-i18n');
     if (dict[key] !== undefined) el.textContent = dict[key];
   });
-  // placeholders
   document.querySelectorAll('[data-i18n-ph]').forEach(el => {
     const key = el.getAttribute('data-i18n-ph');
     if (dict[key] !== undefined) el.placeholder = dict[key];
   });
-  // active-lang buttons
   ['btnLangTR','btnLangEN','pauseLangTR','pauseLangEN'].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
@@ -51,7 +52,7 @@ function applyLang(lang) {
   });
 }
 
-// ============ AUDIO (procedural — no asset files) ============
+// ============ AUDIO (procedural) ============
 const AUD = {
   ctx: null, master: null, musicGain: null, sfxGain: null,
   musicTimer: null, started: false, volume: 0.5,
@@ -113,7 +114,6 @@ const AUD = {
     const g = this.ctx.createGain(); g.gain.value = 0.5;
     src.connect(filter); filter.connect(g); g.connect(this.sfxGain);
     src.start(t);
-    // low thump
     const osc = this.ctx.createOscillator();
     const og = this.ctx.createGain();
     osc.type = 'square'; osc.frequency.setValueAtTime(120, t);
@@ -135,9 +135,7 @@ const AUD = {
       osc.connect(g); g.connect(this.sfxGain);
       osc.start(when); osc.stop(when + 0.07);
     };
-    click(t0, 220);
-    click(t0 + 0.5, 180);
-    click(t0 + 1.2, 260);
+    click(t0, 220); click(t0 + 0.5, 180); click(t0 + 1.2, 260);
   },
   step() {
     if (!this.ctx) return;
@@ -161,397 +159,29 @@ function startAudioOnGesture() {
 document.addEventListener('click', startAudioOnGesture);
 document.addEventListener('keydown', startAudioOnGesture);
 
-// ============ P2P NETWORK (PeerJS / WebRTC) ============
-// No central game server — whoever creates a room hosts the
-// authoritative game in their browser. Others connect via WebRTC.
-
-function makeRoomCode() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let s = '';
-  for (let i = 0; i < 5; i++) s += chars[Math.floor(Math.random() * chars.length)];
-  return s;
+// ============ SOCKET.IO ============
+let socket;
+try {
+  socket = io();
+  socket.on('connect_error', () => console.warn('[Net] Sunucuya bağlanılamıyor.'));
+  socket.on('connect', () => console.log('[Net] Bağlandı:', socket.id));
+} catch (e) {
+  console.warn('[Net] Socket.IO yüklenemedi. Sunucu çalışıyor mu?');
+  socket = { id: 'offline', emit: () => {}, on: () => {} };
 }
-
-// PeerJS broker + ICE config. Explicit broker so host and joiner
-// hit the same server. Multiple STUN + free TURN relays so peers
-// behind symmetric NAT (most home routers) can still connect.
-const PEER_CONFIG = {
-  host: '0.peerjs.com',
-  port: 443,
-  path: '/',
-  secure: true,
-  debug: 2,
-  config: {
-    iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-      { urls: 'stun:stun.cloudflare.com:3478' },
-      // Free TURN relays (handle strict NAT). Open / community.
-      {
-        urls: 'turn:openrelay.metered.ca:80',
-        username: 'openrelayproject',
-        credential: 'openrelayproject',
-      },
-      {
-        urls: 'turn:openrelay.metered.ca:443',
-        username: 'openrelayproject',
-        credential: 'openrelayproject',
-      },
-      {
-        urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-        username: 'openrelayproject',
-        credential: 'openrelayproject',
-      },
-    ],
-    iceTransportPolicy: 'all',
-  },
-};
-const PEER_PREFIX = 'goldwave';
-
-const Net = {
-  id: null,
-  mode: null,        // 'host' | 'joiner'
-  peer: null,
-  hostGame: null,
-  hostConn: null,    // joiner -> host conn
-  clients: new Map(),// host: peerId -> conn
-  roomCode: null,
-  ownerId: null,
-  handlers: {},
-
-  on(event, h) { this.handlers[event] = h; },
-  _trigger(event, payload) {
-    const h = this.handlers[event];
-    if (h) h(payload);
-  },
-
-  emit(event, payload, ack) {
-    switch (event) {
-      case 'listRooms': if (typeof payload === 'function') payload([]); return;
-      case 'createRoom': return this._createRoom(payload, ack);
-      case 'joinRoom':   return this._joinRoom(payload, ack);
-      case 'leaveRoom':  return this._leaveRoom();
-      case 'startGame':  return this._startGame();
-      case 'changeColor': return this._changeColor(payload);
-      case 'chatName':    return this._chatName(payload);
-      case 'input':       return this._sendInput(payload);
-      case 'reload':      return this._reload();
-    }
-  },
-
-  _hostCallbacks() {
-    return {
-      onState: (s) => {
-        const msg = { kind: 'state', payload: s };
-        for (const c of this.clients.values()) if (c.open) c.send(msg);
-        this._trigger('state', s);
-      },
-      onKill: (k) => {
-        const msg = { kind: 'kill', payload: k };
-        for (const c of this.clients.values()) if (c.open) c.send(msg);
-        this._trigger('kill', k);
-      },
-      onRoundStart: (d) => {
-        const msg = { kind: 'roundStart', payload: d };
-        for (const c of this.clients.values()) if (c.open) c.send(msg);
-        this._trigger('roundStart', d);
-      },
-      onRoundEnd: (d) => {
-        const msg = { kind: 'roundEnd', payload: d };
-        for (const c of this.clients.values()) if (c.open) c.send(msg);
-        this._trigger('roundEnd', d);
-      },
-    };
-  },
-
-  _broadcastRoomUpdate() {
-    if (!this.hostGame) return;
-    const room = this.hostGame.publicRoom(this.roomCode, this.ownerId);
-    const msg = { kind: 'roomUpdate', payload: room };
-    for (const c of this.clients.values()) if (c.open) c.send(msg);
-    this._trigger('roomUpdate', room);
-  },
-
-  _createRoom({ name, color }, ack) {
-    if (typeof Peer === 'undefined') {
-      ack && ack({ ok: false, error: 'PeerJS yuklenemedi (internet yok?)' });
-      return;
-    }
-    if (this.peer || this.mode) this._leaveRoom();
-    const code = makeRoomCode();
-    this.mode = 'host';
-    this.roomCode = code;
-    const fullId = PEER_PREFIX + code;
-    setNetStatus('PeerJS sunucusuna baglaniliyor...');
-    console.log('[Net] createRoom: peer id =', fullId);
-    this.peer = new Peer(fullId, PEER_CONFIG);
-    let acked = false;
-    const failTimer = setTimeout(() => {
-      if (!acked) {
-        acked = true;
-        ack && ack({ ok: false, error: 'PeerJS sunucusuna 12sn icinde baglanamadi. Internet/firewall kontrol et.' });
-        this._leaveRoom();
-      }
-    }, 12000);
-    this.peer.on('open', (id) => {
-      clearTimeout(failTimer);
-      console.log('[Net] host opened, id =', id);
-      this.id = id;
-      this.ownerId = id;
-      this.hostGame = new HostGame(this._hostCallbacks());
-      this.hostGame.start();
-      this.hostGame.addPlayer(id, name, color);
-      acked = true;
-      setNetStatus('Oda hazir: ' + code);
-      ack && ack({
-        ok: true,
-        roomId: code,
-        ownerId: id,
-        room: this.hostGame.publicRoom(code, id),
-      });
-    });
-    this.peer.on('disconnected', () => {
-      console.warn('[Net] host disconnected from broker, retrying...');
-      setNetStatus('Aglara baglanti koptu, tekrar baglaniyor...');
-      try { this.peer.reconnect(); } catch (e) {}
-    });
-    this.peer.on('error', (e) => {
-      console.warn('[Net] peer error', e.type, e.message);
-      if (!acked) {
-        clearTimeout(failTimer);
-        acked = true;
-        let msg = 'Hata (' + (e.type || 'unknown') + ')';
-        if (e.type === 'unavailable-id') msg = 'Oda kodu mesgul, tekrar dene';
-        else if (e.type === 'network' || e.type === 'server-error') msg = 'PeerJS sunucusuna erisilemiyor (internet/firewall?)';
-        else if (e.type === 'browser-incompatible') msg = 'Tarayicin WebRTC destekemiyor';
-        else if (e.type === 'ssl-unavailable') msg = 'SSL hatasi. Sayfayi HTTPS uzerinden ac.';
-        ack && ack({ ok: false, error: msg });
-        this._leaveRoom();
-      }
-    });
-    this.peer.on('connection', (conn) => this._handleClientConn(conn));
-  },
-
-  _handleClientConn(conn) {
-    conn.on('open', () => { this.clients.set(conn.peer, conn); });
-    conn.on('data', (msg) => {
-      const from = conn.peer;
-      if (!msg || !msg.kind) return;
-      switch (msg.kind) {
-        case 'joinPlayer': {
-          if (!this.hostGame) return;
-          if (this.hostGame.players.size >= 10) {
-            conn.send({ kind: 'joinedErr', payload: { error: 'Oda dolu' } });
-            try { conn.close(); } catch (e) {}
-            return;
-          }
-          if (this.hostGame.started) {
-            conn.send({ kind: 'joinedErr', payload: { error: 'Oyun başladı' } });
-            try { conn.close(); } catch (e) {}
-            return;
-          }
-          this.hostGame.addPlayer(from, msg.payload.name, msg.payload.color);
-          conn.send({
-            kind: 'joinedOk',
-            payload: {
-              roomId: this.roomCode,
-              ownerId: this.ownerId,
-              selfId: from,
-              room: this.hostGame.publicRoom(this.roomCode, this.ownerId),
-            },
-          });
-          this._broadcastRoomUpdate();
-          break;
-        }
-        case 'input':       this.hostGame && this.hostGame.applyInput(from, msg.payload); break;
-        case 'reload':      this.hostGame && this.hostGame.tryReload(from); break;
-        case 'changeColor': if (this.hostGame) { this.hostGame.setColor(from, msg.payload.color); this._broadcastRoomUpdate(); } break;
-        case 'chatName':    if (this.hostGame) { this.hostGame.setName(from, msg.payload.name); this._broadcastRoomUpdate(); } break;
-      }
-    });
-    conn.on('close', () => {
-      this.clients.delete(conn.peer);
-      if (this.hostGame) {
-        this.hostGame.removePlayer(conn.peer);
-        this._broadcastRoomUpdate();
-      }
-    });
-    conn.on('error', () => {
-      this.clients.delete(conn.peer);
-    });
-  },
-
-  _joinRoom({ roomId, name, color }, ack) {
-    if (typeof Peer === 'undefined') {
-      ack && ack({ ok: false, error: 'PeerJS yuklenemedi (internet yok?)' });
-      return;
-    }
-    // Force clean state — prevent multiple peers stacking on rapid clicks
-    if (this.peer || this.mode) this._leaveRoom();
-    this.mode = 'joiner';
-    this.roomCode = String(roomId || '').trim().toUpperCase();
-    const targetId = PEER_PREFIX + this.roomCode;
-    setNetStatus('PeerJS sunucusuna baglaniliyor...');
-    console.log('[Net] joinRoom: target peer id =', targetId);
-    this.peer = new Peer(undefined, PEER_CONFIG);
-    let acked = false;
-    let openedAt = 0;
-    const overallTimer = setTimeout(() => {
-      if (!acked) {
-        acked = true;
-        ack && ack({ ok: false, error: 'Zaman asimi: 15sn icinde baglanilamadi' });
-        this._leaveRoom();
-      }
-    }, 15000);
-    this.peer.on('open', (id) => {
-      console.log('[Net] joiner peer opened, id =', id);
-      this.id = id;
-      setNetStatus('Host araniyor...');
-      const conn = this.peer.connect(targetId, { reliable: true });
-      this.hostConn = conn;
-      conn.on('open', () => {
-        openedAt = Date.now();
-        console.log('[Net] data channel open');
-        // Log underlying RTCPeerConnection state to diagnose NAT issues
-        try {
-          const pc = conn.peerConnection;
-          if (pc) {
-            console.log('[Net] connectionState=', pc.connectionState,
-              'iceConnectionState=', pc.iceConnectionState,
-              'iceGatheringState=', pc.iceGatheringState);
-            pc.oniceconnectionstatechange = () => {
-              console.log('[Net] iceConnectionState ->', pc.iceConnectionState);
-            };
-            pc.onconnectionstatechange = () => {
-              console.log('[Net] connectionState ->', pc.connectionState);
-            };
-          }
-        } catch (e) {}
-        setNetStatus('Bilgi gonderiliyor...');
-        conn.send({ kind: 'joinPlayer', name, color });
-      });
-      conn.on('data', (msg) => {
-        if (msg.kind === 'joinedOk') {
-          clearTimeout(overallTimer);
-          if (acked) { this._trigger('roomUpdate', msg.payload.room); return; }
-          acked = true;
-          this.ownerId = msg.payload.ownerId;
-          setNetStatus('');
-          ack && ack({
-            ok: true,
-            roomId: msg.payload.roomId,
-            ownerId: msg.payload.ownerId,
-            room: msg.payload.room,
-          });
-        } else if (msg.kind === 'joinedErr') {
-          clearTimeout(overallTimer);
-          if (acked) return;
-          acked = true;
-          ack && ack({ ok: false, error: msg.payload.error });
-          this._leaveRoom();
-        } else {
-          this._trigger(msg.kind, msg.payload);
-        }
-      });
-      conn.on('close', () => {
-        console.warn('[Net] conn closed at', Date.now(), 'opened-since:', openedAt ? Date.now()-openedAt : 'never');
-        if (!acked) {
-          clearTimeout(overallTimer);
-          acked = true;
-          if (openedAt && Date.now() - openedAt < 3000) {
-            ack && ack({ ok: false, error: 'Oda hayalet: PeerJS broker\'da kayit var ama gercek host yanit vermiyor. Host tarayicisi acik mi? Kodu host yeniden olusturup verdi mi? (Eski kodlar 1-2 dk sonra dusuyor.)' });
-          } else {
-            ack && ack({ ok: false, error: 'Baglanti kapandi' });
-          }
-        }
-        this._trigger('hostDisconnected', null);
-      });
-      conn.on('error', (e) => {
-        console.warn('[Net] conn error', e);
-        if (!acked) {
-          clearTimeout(overallTimer);
-          acked = true;
-          ack && ack({ ok: false, error: 'Baglanti hatasi: ' + (e.type || e.message || 'unknown') });
-        }
-      });
-    });
-    this.peer.on('error', (e) => {
-      console.warn('[Net] joiner peer error', e.type, e.message);
-      if (acked) return;
-      clearTimeout(overallTimer);
-      acked = true;
-      let msg = 'Hata (' + (e.type || 'unknown') + ')';
-      if (e.type === 'peer-unavailable') msg = 'Oda bulunamadi (kod yanlis veya host henuz hazir degil, 5sn bekleyip tekrar dene)';
-      else if (e.type === 'network' || e.type === 'server-error') msg = 'PeerJS sunucusuna erisilemiyor (internet/firewall?)';
-      else if (e.type === 'browser-incompatible') msg = 'Tarayicin WebRTC desteklemiyor';
-      else if (e.type === 'ssl-unavailable') msg = 'SSL hatasi. Sayfayi HTTPS uzerinden ac.';
-      ack && ack({ ok: false, error: msg });
-      this._leaveRoom();
-    });
-  },
-
-  _leaveRoom() {
-    for (const c of this.clients.values()) { try { c.close(); } catch (e) {} }
-    this.clients.clear();
-    if (this.hostConn) { try { this.hostConn.close(); } catch (e) {} }
-    if (this.hostGame) { this.hostGame.stop(); this.hostGame = null; }
-    if (this.peer) { try { this.peer.destroy(); } catch (e) {} }
-    this.peer = null; this.id = null; this.mode = null;
-    this.hostConn = null; this.roomCode = null; this.ownerId = null;
-  },
-
-  _startGame() {
-    if (this.mode === 'host' && this.hostGame && !this.hostGame.started) {
-      this.hostGame.startRound();
-    }
-  },
-  _changeColor({ color }) {
-    if (this.mode === 'host' && this.hostGame) {
-      this.hostGame.setColor(this.id, color);
-      this._broadcastRoomUpdate();
-    } else if (this.hostConn && this.hostConn.open) {
-      this.hostConn.send({ kind: 'changeColor', payload: { color } });
-    }
-  },
-  _chatName({ name }) {
-    if (this.mode === 'host' && this.hostGame) {
-      this.hostGame.setName(this.id, name);
-      this._broadcastRoomUpdate();
-    } else if (this.hostConn && this.hostConn.open) {
-      this.hostConn.send({ kind: 'chatName', payload: { name } });
-    }
-  },
-  _sendInput(input) {
-    if (this.mode === 'host' && this.hostGame) {
-      this.hostGame.applyInput(this.id, input);
-    } else if (this.hostConn && this.hostConn.open) {
-      this.hostConn.send({ kind: 'input', payload: input });
-    }
-  },
-  _reload() {
-    if (this.mode === 'host' && this.hostGame) {
-      this.hostGame.tryReload(this.id);
-    } else if (this.hostConn && this.hostConn.open) {
-      this.hostConn.send({ kind: 'reload' });
-    }
-  },
-};
 
 function setNetStatus(msg) {
   const el = document.getElementById('netStatus');
   if (el) el.textContent = msg || '';
 }
 
-// existing code uses `socket` global; alias it
-const socket = Net;
-
+// ============ COLORS & NAMES ============
 const COLORS = [
   '#ff5577', '#ff8a3c', '#ffd24a', '#7ad24a',
   '#4ad2c2', '#4a8aff', '#a44aff', '#ff4ad2',
   '#ffffff', '#888888', '#222222', '#cc6633',
   '#33cc66', '#3366cc', '#ff3030', '#22dd22'
 ];
-
 const NAME_POOL = [
   'KARTOFEL','PIXEL','NEON','BOLT','ECHO','ZAP','BYTE','GLITCH',
   'ROBO','SPARK','CHIP','TURBO','HEX','VOLT','FLUX','RUST'
@@ -560,135 +190,89 @@ const NAME_POOL = [
 const state = {
   name: NAME_POOL[Math.floor(Math.random()*NAME_POOL.length)] + Math.floor(Math.random()*1000),
   color: COLORS[Math.floor(Math.random()*8)],
-  roomId: null,
-  ownerId: null,
-  selfId: null,
-  inLobby: false,
-  inGame: false,
-  walls: [],
-  mapW: 1600, mapH: 1200,
-  endsAt: 0,
-  serverState: null,
-  killfeed: [],
+  roomId: null, ownerId: null, selfId: null,
+  isHost: false,
+  inLobby: false, inGame: false,
+  walls: [], mapW: 1600, mapH: 1200,
+  endsAt: 0, serverState: null, killfeed: [],
 };
 
-// ===== Pixel art robot drawing =====
-// 16x20 grid. 0 = transparent, 1=outline, 2=body, 3=screen, 4=eyes, 5=antenna
+// ===== Robot pixel art =====
 const ROBOT_SPRITE = [
-  "0000000505000000",
-  "0000000515000000",
-  "0000011111100000",
-  "0000122222210000",
-  "0001222222221000",
-  "0012233333322100",
-  "0122334444332210",
-  "0122334444332210",
-  "0122333333332210",
-  "0122222222222210",
-  "0122222222222210",
-  "0112222222222110",
-  "0011222222221100",
-  "0001122222110000",
-  "0001212222121000",
-  "0001212222121000",
-  "0001210000121000",
-  "0001210000121000",
-  "0000110000110000",
-  "0000110000110000",
+  "0000000505000000","0000000515000000",
+  "0000011111100000","0000122222210000",
+  "0001222222221000","0012233333322100",
+  "0122334444332210","0122334444332210",
+  "0122333333332210","0122222222222210",
+  "0122222222222210","0112222222222110",
+  "0011222222221100","0001122222110000",
+  "0001212222121000","0001212222121000",
+  "0001210000121000","0001210000121000",
+  "0000110000110000","0000110000110000",
 ];
 
-function drawRobot(ctx, ox, oy, scale, color, angle = 0) {
-  // angle: rotates the robot top-view. For preview pass 0.
-  const cell = scale;
-  const w = 16, h = 20;
+function drawRobot(ctx, ox, oy, scale, color) {
+  const cell = scale, w = 16, h = 20;
   ctx.save();
   ctx.translate(ox + (w*cell)/2, oy + (h*cell)/2);
-  ctx.rotate(angle);
   ctx.imageSmoothingEnabled = false;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const c = ROBOT_SPRITE[y][x];
       if (c === '0') continue;
       let fill;
-      if (c === '1') fill = '#0a0a0a';
-      else if (c === '2') fill = color;
-      else if (c === '3') fill = '#1a1a2a';
-      else if (c === '4') fill = '#7afcff';
-      else if (c === '5') fill = '#ff3050';
+      if (c==='1') fill='#0a0a0a';
+      else if (c==='2') fill=color;
+      else if (c==='3') fill='#1a1a2a';
+      else if (c==='4') fill='#7afcff';
+      else if (c==='5') fill='#ff3050';
       ctx.fillStyle = fill;
-      ctx.fillRect(-((w*cell)/2) + x*cell, -((h*cell)/2) + y*cell, cell, cell);
+      ctx.fillRect(-((w*cell)/2)+x*cell, -((h*cell)/2)+y*cell, cell, cell);
     }
   }
   ctx.restore();
 }
 
-// Top-down robot for in-game (rotates with angle, includes weapon)
 function drawRobotTopDown(ctx, x, y, color, angle, alive=true) {
   const r = 14;
-  ctx.save();
-  ctx.translate(x, y);
-  // shadow
+  ctx.save(); ctx.translate(x, y);
   ctx.fillStyle = 'rgba(0,0,0,0.4)';
   ctx.beginPath(); ctx.ellipse(2, 4, r+2, r/2, 0, 0, Math.PI*2); ctx.fill();
   if (!alive) ctx.globalAlpha = 0.35;
   ctx.rotate(angle);
-  // body (pixel square chunks)
-  const px = 3;
   function rect(cx, cy, cw, ch, col) {
     ctx.fillStyle = col;
     ctx.fillRect(Math.floor(cx), Math.floor(cy), cw, ch);
   }
-  // outer outline
   rect(-r, -r+2, r*2, r*2-4, '#0a0a0a');
-  // body fill
   rect(-r+2, -r+4, r*2-4, r*2-8, color);
-  // screen face (facing forward = +x)
   rect(0, -r/2, r-2, r, '#1a1a2a');
-  rect(0, -r/2, r-2, r, '#1a1a2a');
-  // eyes on screen
   rect(r-8, -3, 2, 2, '#7afcff');
   rect(r-8,  1, 2, 2, '#7afcff');
-  // antenna nub
   rect(-r-2, -1, 3, 3, '#ff3050');
-  // weapon (rifle) — long rectangle pointing forward
   rect(r-2, -2, 14, 4, '#222');
   rect(r-2, -3, 4, 6, '#555');
   rect(r+8, -1, 4, 2, '#ffd24a');
   ctx.restore();
 }
 
-// shirt icon — clearer t-shirt silhouette
 function drawShirt(ctx) {
-  ctx.clearRect(0,0,40,40);
-  ctx.imageSmoothingEnabled = false;
-  // 1 = outline, 2 = fabric, 3 = collar shade
+  ctx.clearRect(0,0,40,40); ctx.imageSmoothingEnabled = false;
   const map = [
-    "01100011000110",
-    "11110111101111",
-    "12221333312221",
-    "12222311132221",
-    "01222222222210",
-    "00122222222100",
-    "00122222222100",
-    "00122222222100",
-    "00122222222100",
-    "00122222222100",
-    "00111111111100",
+    "01100011000110","11110111101111","12221333312221",
+    "12222311132221","01222222222210","00122222222100",
+    "00122222222100","00122222222100","00122222222100",
+    "00122222222100","00111111111100",
   ];
   const s = 2;
   const ox = Math.floor((40 - map[0].length * s) / 2);
   const oy = Math.floor((40 - map.length * s) / 2);
-  for (let y=0;y<map.length;y++) {
-    for (let x=0;x<map[y].length;x++) {
-      const c = map[y][x];
-      if (c==='0') continue;
-      let col;
-      if (c==='1') col = '#0a0a0a';
-      else if (c==='2') col = '#ffd24a';
-      else col = '#caa030';
-      ctx.fillStyle = col;
-      ctx.fillRect(ox + x*s, oy + y*s, s, s);
-    }
+  for (let y=0;y<map.length;y++) for (let x=0;x<map[y].length;x++) {
+    const c = map[y][x];
+    if (c==='0') continue;
+    let col = c==='1' ? '#0a0a0a' : c==='2' ? '#ffd24a' : '#caa030';
+    ctx.fillStyle = col;
+    ctx.fillRect(ox+x*s, oy+y*s, s, s);
   }
 }
 
@@ -706,7 +290,6 @@ nameInput.addEventListener('input', () => {
   if (state.roomId) socket.emit('chatName', { name: state.name });
 });
 
-// character preview
 const previewCanvas = $('charPreview');
 const previewCtx = previewCanvas.getContext('2d');
 previewCanvas.width = 180; previewCanvas.height = 230;
@@ -714,23 +297,18 @@ function renderPreview() {
   previewCtx.imageSmoothingEnabled = false;
   previewCtx.fillStyle = '#2a1f44';
   previewCtx.fillRect(0,0,180,230);
-  // floor pattern
   previewCtx.fillStyle = '#3a2a5a';
   for (let i=0;i<180;i+=16) previewCtx.fillRect(i,210,8,8);
-  // center the 16x20 sprite at scale 9 -> 144x180
   drawRobot(previewCtx, 18, 20, 9, state.color);
 }
 renderPreview();
-
 drawShirt($('shirtIcon').getContext('2d'));
 
-// palette
 const palette = $('colorPalette');
 COLORS.forEach(c => {
   const cv = document.createElement('canvas');
   cv.width = 16; cv.height = 20;
-  const cx = cv.getContext('2d');
-  drawRobot(cx, 0, 0, 1, c);
+  drawRobot(cv.getContext('2d'), 0, 0, 1, c);
   if (c === state.color) cv.classList.add('selected');
   cv.addEventListener('click', () => {
     state.color = c;
@@ -743,8 +321,6 @@ COLORS.forEach(c => {
 });
 
 $('btnWardrobe').addEventListener('click', () => palette.classList.toggle('hidden'));
-
-// apply language on load
 applyLang(currentLang);
 
 $('btnPlay').addEventListener('click', () => { show('rooms'); setNetStatus(''); });
@@ -765,32 +341,50 @@ function setConnecting(v) {
   $('btnCreateRoom').disabled = v;
   $('btnJoinCode').disabled = v;
 }
+
 $('btnCreateRoom').addEventListener('click', () => {
   if (connecting) return;
   setConnecting(true);
+  setNetStatus(I18N[currentLang].connecting);
   socket.emit('createRoom', { name: state.name, color: state.color }, (res) => {
     setConnecting(false);
-    if (res.ok) { enterLobby(res.roomId, res.ownerId); if (res.room) renderLobby(res.room); }
-    else alert(res.error || 'Bağlanılamadı');
+    setNetStatus('');
+    if (res && res.ok) {
+      state.isHost = true;
+      state.selfId = socket.id;
+      enterLobby(res.roomId, res.ownerId);
+      if (res.room) renderLobby(res.room);
+    } else {
+      alert((res && res.error) || 'Bağlanılamadı');
+    }
   });
 });
+
 $('btnJoinCode').addEventListener('click', () => {
   if (connecting) return;
   const code = $('joinCode').value.trim().toUpperCase();
   if (code) joinRoom(code);
 });
+
 function joinRoom(code) {
   setConnecting(true);
+  setNetStatus(I18N[currentLang].connecting);
   socket.emit('joinRoom', { roomId: code, name: state.name, color: state.color }, (res) => {
     setConnecting(false);
-    if (res.ok) { enterLobby(res.roomId, res.ownerId); if (res.room) renderLobby(res.room); }
-    else alert(res.error);
+    setNetStatus('');
+    if (res && res.ok) {
+      state.isHost = false;
+      state.selfId = res.selfId || socket.id;
+      enterLobby(res.roomId, res.ownerId);
+      if (res.room) renderLobby(res.room);
+    } else {
+      alert((res && res.error) || 'Bağlanılamadı');
+    }
   });
 }
 
 function renderLobby(room) {
   state.ownerId = room.ownerId;
-  state.selfId = socket.id;
   const root = $('lobbyPlayers');
   root.innerHTML = '';
   room.players.forEach(p => {
@@ -806,17 +400,16 @@ function renderLobby(room) {
 
 function enterLobby(roomId, ownerId) {
   state.roomId = roomId; state.ownerId = ownerId;
-  state.selfId = socket.id;
   $('lobbyCode').textContent = roomId;
-  const isHost = Net.mode === 'host';
-  $('lobbyStatus').textContent = isHost
-    ? 'Oda aktif. Kodu arkadasina ver, sonra BASLAT.'
-    : 'Lobiye baglandin. Host baslatmasini bekle.';
+  $('lobbyStatus').textContent = state.isHost
+    ? 'Oda aktif. Kodu arkadaşına ver, sonra BASLAT.'
+    : 'Lobiye bağlandın. Host başlatmasını bekle.';
   show('lobby');
 }
+
 $('btnLeave').addEventListener('click', () => {
   socket.emit('leaveRoom');
-  state.roomId = null; state.ownerId = null;
+  state.roomId = null; state.ownerId = null; state.isHost = false;
   show('menu');
 });
 $('btnStart').addEventListener('click', () => socket.emit('startGame'));
@@ -829,7 +422,7 @@ socket.on('roomUpdate', (room) => {
 socket.on('hostDisconnected', () => {
   if (!state.roomId) return;
   alert('Host bağlantıyı kesti');
-  state.roomId = null; state.ownerId = null;
+  state.roomId = null; state.ownerId = null; state.isHost = false;
   state.inGame = false; state.serverState = null;
   $('pauseMenu').classList.add('hidden');
   $('roundEnd').classList.add('hidden');
@@ -853,39 +446,26 @@ let mouseX = 0, mouseY = 0, mouseDown = false;
 
 window.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
-  if (k in keys) { keys[k] = true; sendInput(); }
+  if (k in keys) keys[k] = true;
   if (k === 'r' && state.inGame) {
     const me = state.serverState && state.serverState.players.find(p => p.id === socket.id);
     if (me && me.alive && !me.reloading && me.ammo < (me.maxAmmo || 30)) {
       socket.emit('reload');
     }
   }
-  if (e.key === 'Escape' && state.inGame) {
-    togglePause();
-    e.preventDefault();
-  }
+  if (e.key === 'Escape' && state.inGame) { togglePause(); e.preventDefault(); }
 });
 window.addEventListener('keyup', e => {
   const k = e.key.toLowerCase();
-  if (k in keys) { keys[k] = false; sendInput(); }
+  if (k in keys) keys[k] = false;
 });
 gameCanvas.addEventListener('mousemove', e => {
   const r = gameCanvas.getBoundingClientRect();
-  mouseX = e.clientX - r.left;
-  mouseY = e.clientY - r.top;
+  mouseX = e.clientX - r.left; mouseY = e.clientY - r.top;
 });
-gameCanvas.addEventListener('mousedown', e => {
-  if (e.button === 0) { mouseDown = true; sendInput(); }
-});
-window.addEventListener('mouseup', e => {
-  if (e.button === 0) { mouseDown = false; sendInput(); }
-});
+gameCanvas.addEventListener('mousedown', e => { if (e.button===0) mouseDown = true; });
+window.addEventListener('mouseup', e => { if (e.button===0) mouseDown = false; });
 gameCanvas.addEventListener('contextmenu', e => e.preventDefault());
-
-let lastSent = 0;
-function sendInput() {
-  // computed on every animation frame too, this is for key events
-}
 
 function computeAngle() {
   if (!state.serverState) return 0;
@@ -895,7 +475,6 @@ function computeAngle() {
   return Math.atan2(mouseY - sy, mouseX - sx);
 }
 
-// volume sync (both sliders stay in sync)
 function syncVolume(v) {
   AUD.setVolume(v);
   $('setVolume').value = Math.round(v * 100);
@@ -904,13 +483,11 @@ function syncVolume(v) {
 $('setVolume').addEventListener('input', (e) => syncVolume(parseInt(e.target.value,10)/100));
 $('pauseVolume').addEventListener('input', (e) => syncVolume(parseInt(e.target.value,10)/100));
 
-function togglePause() {
-  $('pauseMenu').classList.toggle('hidden');
-}
+function togglePause() { $('pauseMenu').classList.toggle('hidden'); }
 $('btnResume').addEventListener('click', togglePause);
 $('btnLeaveGame').addEventListener('click', () => {
   socket.emit('leaveRoom');
-  state.roomId = null; state.ownerId = null;
+  state.roomId = null; state.ownerId = null; state.isHost = false;
   state.inGame = false; state.serverState = null;
   $('pauseMenu').classList.add('hidden');
   $('roundEnd').classList.add('hidden');
@@ -918,37 +495,36 @@ $('btnLeaveGame').addEventListener('click', () => {
   show('menu');
 });
 
+// Input loop: 20 Hz
 setInterval(() => {
   if (!state.inGame) return;
-  const angle = computeAngle();
-  socket.emit('input', { keys, angle, mouseDown });
+  socket.emit('input', { keys, angle: computeAngle(), mouseDown });
 }, 50);
 
+// Footstep sounds
 let lastStepAt = 0;
 setInterval(() => {
   if (!state.inGame || !state.serverState) return;
   const me = state.serverState.players.find(p => p.id === socket.id);
   if (!me || !me.alive) return;
-  if (!(keys.w || keys.a || keys.s || keys.d)) return;
+  if (!(keys.w||keys.a||keys.s||keys.d)) return;
   const now = Date.now();
   if (now - lastStepAt > 330) { AUD.step(); lastStepAt = now; }
 }, 80);
 
+// ===== Socket events =====
 socket.on('roundStart', (data) => {
   state.walls = data.walls;
-  state.mapW = data.mapW;
-  state.mapH = data.mapH;
+  state.mapW = data.mapW; state.mapH = data.mapH;
   state.endsAt = data.endsAt;
-  state.inGame = true;
-  state.killfeed = [];
+  state.inGame = true; state.killfeed = [];
   lastAmmo = null; wasReloading = false;
   $('dead').classList.add('hidden');
   $('roundEnd').classList.add('hidden');
   show('game');
 });
 
-let lastAmmo = null;
-let wasReloading = false;
+let lastAmmo = null, wasReloading = false;
 socket.on('state', (s) => {
   state.serverState = s;
   state.endsAt = s.endsAt;
@@ -959,8 +535,7 @@ socket.on('state', (s) => {
       for (let i = 0; i < shots; i++) AUD.shoot();
     }
     if (me.reloading && !wasReloading) AUD.reload();
-    lastAmmo = me.ammo;
-    wasReloading = me.reloading;
+    lastAmmo = me.ammo; wasReloading = me.reloading;
   }
 });
 
@@ -971,8 +546,7 @@ socket.on('kill', ({ killer, victim }) => {
 
 socket.on('roundEnd', ({ board, winner }) => {
   state.inGame = false;
-  const overlay = $('roundEnd');
-  overlay.classList.remove('hidden');
+  $('roundEnd').classList.remove('hidden');
   const d = I18N[currentLang];
   $('winnerLine').textContent = winner
     ? `${d.winner}: ${winner.name} (${winner.kills} ${d.kills})`
@@ -980,14 +554,14 @@ socket.on('roundEnd', ({ board, winner }) => {
   const fb = $('finalBoard');
   fb.innerHTML = '';
   board.forEach(p => {
-    const d = document.createElement('div');
-    d.className = 'row';
-    d.innerHTML = `<span>${p.name}</span><span>${p.kills}</span>`;
-    fb.appendChild(d);
+    const div = document.createElement('div');
+    div.className = 'row';
+    div.innerHTML = `<span style="color:${p.color}">${p.name}</span><span>${p.kills} ${d.kills}</span>`;
+    fb.appendChild(div);
   });
 });
 
-// ===== Render loop =====
+// ===== HUD + Render =====
 function renderHUD() {
   const ss = state.serverState;
   if (!ss) return;
@@ -996,19 +570,19 @@ function renderHUD() {
   const remaining = Math.max(0, state.endsAt - Date.now());
   const mm = Math.floor(remaining/60000);
   const sec = Math.floor((remaining%60000)/1000);
-  $('timer').textContent = String(mm).padStart(2,'0') + ':' + String(sec).padStart(2,'0');
-  // hp bar (current life HP, 0..maxHp)
+  $('timer').textContent = String(mm).padStart(2,'0')+':'+String(sec).padStart(2,'0');
+  // hp bar (current life HP)
   const hp = me ? Math.max(0, me.hp) : 0;
   const maxHp = me && me.maxHp ? me.maxHp : 10;
-  $('hpfill').style.width = Math.min(100, (hp/maxHp*100)) + '%';
+  $('hpfill').style.width = Math.min(100, hp/maxHp*100) + '%';
   // dead overlay
   $('dead').classList.toggle('hidden', !me || me.alive);
   // ammo
-  const ammoEl = $('ammo');
   if (me) {
     $('ammoCur').textContent = me.reloading ? '...' : me.ammo;
-    ammoEl.querySelector('.max').textContent = '/' + (me.maxAmmo || 30);
-    ammoEl.classList.toggle('reloading', !!me.reloading);
+    const maxEl = $('ammo').querySelector('.max');
+    if (maxEl) maxEl.textContent = '/' + (me.maxAmmo || 30);
+    $('ammo').classList.toggle('reloading', !!me.reloading);
   }
   // leaderboard
   const lb = $('leaderboard');
@@ -1028,6 +602,21 @@ function renderHUD() {
   });
 }
 
+function drawHeart(ctx, x, y) {
+  const map = ["0110110","1111111","1111111","0111110","0011100","0001000"];
+  const s = 3;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(x-11, y-10, 22, 21);
+  for (let yy=0;yy<map.length;yy++) {
+    for (let xx=0;xx<map[0].length;xx++) {
+      if (map[yy][xx]==='1') {
+        ctx.fillStyle = (yy<2) ? '#ff5577' : '#ff3050';
+        ctx.fillRect(x-10+xx*s, y-9+yy*s, s, s);
+      }
+    }
+  }
+}
+
 function render() {
   requestAnimationFrame(render);
   if (!state.inGame || !state.serverState) return;
@@ -1035,23 +624,17 @@ function render() {
   const me = ss.players.find(p => p.id === socket.id);
   const W = gameCanvas.width, H = gameCanvas.height;
 
-  // camera follows player (or center if dead)
-  const cx = me ? me.x : state.mapW/2;
-  const cy = me ? me.y : state.mapH/2;
-  camX = cx - W/2;
-  camY = cy - H/2;
-  camX = Math.max(0, Math.min(state.mapW - W, camX));
-  camY = Math.max(0, Math.min(state.mapH - H, camY));
+  const cx = me ? me.x : state.mapW/2, cy = me ? me.y : state.mapH/2;
+  camX = Math.max(0, Math.min(state.mapW - W, cx - W/2));
+  camY = Math.max(0, Math.min(state.mapH - H, cy - H/2));
   if (state.mapW < W) camX = (state.mapW - W)/2;
   if (state.mapH < H) camY = (state.mapH - H)/2;
 
   gctx.imageSmoothingEnabled = false;
-  // floor (office carpet tiles)
   gctx.fillStyle = '#3a4a4a';
   gctx.fillRect(0,0,W,H);
-  // tile grid
   const ts = 40;
-  const sx = -((camX) % ts), sy = -((camY) % ts);
+  const sx = -(camX % ts), sy = -(camY % ts);
   for (let y = sy; y < H; y += ts) {
     for (let x = sx; x < W; x += ts) {
       const tx = Math.floor((x+camX)/ts), ty = Math.floor((y+camY)/ts);
@@ -1060,82 +643,55 @@ function render() {
     }
   }
 
-  // walls (office desks/cubicles)
   for (const w of state.walls) {
-    const x = w.x - camX, y = w.y - camY;
-    if (x + w.w < 0 || y + w.h < 0 || x > W || y > H) continue;
-    // base
-    gctx.fillStyle = '#5a3a1a';
-    gctx.fillRect(x, y, w.w, w.h);
-    // top highlight
-    gctx.fillStyle = '#8a5a2a';
-    gctx.fillRect(x, y, w.w, 4);
-    gctx.fillRect(x, y, 4, w.h);
-    // shadow
-    gctx.fillStyle = '#2a1a0a';
-    gctx.fillRect(x, y+w.h-3, w.w, 3);
-    gctx.fillRect(x+w.w-3, y, 3, w.h);
+    const x = w.x-camX, y = w.y-camY;
+    if (x+w.w<0||y+w.h<0||x>W||y>H) continue;
+    gctx.fillStyle = '#5a3a1a'; gctx.fillRect(x,y,w.w,w.h);
+    gctx.fillStyle = '#8a5a2a'; gctx.fillRect(x,y,w.w,4); gctx.fillRect(x,y,4,w.h);
+    gctx.fillStyle = '#2a1a0a'; gctx.fillRect(x,y+w.h-3,w.w,3); gctx.fillRect(x+w.w-3,y,3,w.h);
   }
 
-  // hearts
-  for (const h of ss.hearts) {
-    drawHeart(gctx, h.x - camX, h.y - camY);
-  }
+  for (const h of ss.hearts) drawHeart(gctx, h.x-camX, h.y-camY);
 
-  // bullets
   for (const b of ss.bullets) {
-    const x = b.x - camX, y = b.y - camY;
-    gctx.fillStyle = '#000';
-    gctx.fillRect(x-3, y-3, 6, 6);
-    gctx.fillStyle = '#ffd24a';
-    gctx.fillRect(x-2, y-2, 4, 4);
+    const x=b.x-camX, y=b.y-camY;
+    gctx.fillStyle='#000'; gctx.fillRect(x-3,y-3,6,6);
+    gctx.fillStyle='#ffd24a'; gctx.fillRect(x-2,y-2,4,4);
   }
 
-  // players
   for (const p of ss.players) {
-    drawRobotTopDown(gctx, p.x - camX, p.y - camY, p.color, p.angle, p.alive);
-    // name
-    gctx.fillStyle = '#000';
-    gctx.fillRect(p.x - camX - 30, p.y - camY - 30, 60, 12);
-    gctx.fillStyle = p.id === socket.id ? '#ffd24a' : '#fff';
-    gctx.font = '10px "Press Start 2P", monospace';
-    gctx.textAlign = 'center';
-    gctx.fillText(p.name.slice(0,8), p.x - camX, p.y - camY - 20);
-    // life pips (mini pixel hearts) under character
-    const lives = typeof p.lives === 'number' ? p.lives : 0;
-    const maxPips = 5;
-    const heartShape = ["01010","11111","11111","01110","00100"];
-    const cell = 2;
-    const heartW = 5 * cell, heartH = 5 * cell, gap = 3;
-    const totalW = maxPips * heartW + (maxPips - 1) * gap;
-    const startX = Math.floor(p.x - camX - totalW / 2);
-    const py = Math.floor(p.y - camY + 22);
-    for (let i = 0; i < maxPips; i++) {
-      const hx = startX + i * (heartW + gap);
-      const filled = i < lives;
-      // outline
-      for (let yy = 0; yy < 5; yy++) for (let xx = 0; xx < 5; xx++) {
-        if (heartShape[yy][xx] !== '1') continue;
-        gctx.fillStyle = '#000';
-        gctx.fillRect(hx + xx*cell - 1, py + yy*cell - 1, cell + 2, cell + 2);
+    drawRobotTopDown(gctx, p.x-camX, p.y-camY, p.color, p.angle, p.alive);
+    gctx.fillStyle='#000'; gctx.fillRect(p.x-camX-30, p.y-camY-30, 60, 12);
+    gctx.fillStyle = p.id===socket.id ? '#ffd24a' : '#fff';
+    gctx.font='10px "Press Start 2P",monospace'; gctx.textAlign='center';
+    gctx.fillText(p.name.slice(0,8), p.x-camX, p.y-camY-20);
+    // life pips
+    const lives = typeof p.lives==='number' ? p.lives : 0;
+    const maxPips=5, heartShape=["01010","11111","11111","01110","00100"];
+    const cell=2, heartW=5*cell, heartH=5*cell, gap=3;
+    const totalW=maxPips*heartW+(maxPips-1)*gap;
+    const hStartX=Math.floor(p.x-camX-totalW/2), py2=Math.floor(p.y-camY+22);
+    for (let i=0;i<maxPips;i++) {
+      const hx=hStartX+i*(heartW+gap), filled=i<lives;
+      for (let yy=0;yy<5;yy++) for (let xx=0;xx<5;xx++) {
+        if (heartShape[yy][xx]!=='1') continue;
+        gctx.fillStyle='#000'; gctx.fillRect(hx+xx*cell-1,py2+yy*cell-1,cell+2,cell+2);
       }
-      // fill
-      for (let yy = 0; yy < 5; yy++) for (let xx = 0; xx < 5; xx++) {
-        if (heartShape[yy][xx] !== '1') continue;
-        gctx.fillStyle = filled ? (yy < 2 ? '#ff6080' : '#ff3050') : '#3a1018';
-        gctx.fillRect(hx + xx*cell, py + yy*cell, cell, cell);
+      for (let yy=0;yy<5;yy++) for (let xx=0;xx<5;xx++) {
+        if (heartShape[yy][xx]!=='1') continue;
+        gctx.fillStyle = filled?(yy<2?'#ff6080':'#ff3050'):'#3a1018';
+        gctx.fillRect(hx+xx*cell, py2+yy*cell, cell, cell);
       }
     }
   }
 
   // crosshair
-  gctx.strokeStyle = '#ffd24a';
-  gctx.lineWidth = 2;
+  gctx.strokeStyle='#ffd24a'; gctx.lineWidth=2;
   gctx.beginPath();
-  gctx.moveTo(mouseX-8, mouseY); gctx.lineTo(mouseX-2, mouseY);
-  gctx.moveTo(mouseX+2, mouseY); gctx.lineTo(mouseX+8, mouseY);
-  gctx.moveTo(mouseX, mouseY-8); gctx.lineTo(mouseX, mouseY-2);
-  gctx.moveTo(mouseX, mouseY+2); gctx.lineTo(mouseX, mouseY+8);
+  gctx.moveTo(mouseX-8,mouseY); gctx.lineTo(mouseX-2,mouseY);
+  gctx.moveTo(mouseX+2,mouseY); gctx.lineTo(mouseX+8,mouseY);
+  gctx.moveTo(mouseX,mouseY-8); gctx.lineTo(mouseX,mouseY-2);
+  gctx.moveTo(mouseX,mouseY+2); gctx.lineTo(mouseX,mouseY+8);
   gctx.stroke();
 
   renderHUD();
@@ -1145,14 +701,13 @@ requestAnimationFrame(render);
 // ===== MENU MAP PREVIEW =====
 const menuMM = $('menuMinimap');
 const menuMMctx = menuMM.getContext('2d');
-const MM_W = 400, MM_H = 300;
-const MM_MAP_W = 1600, MM_MAP_H = 1200;
-const mmSx = MM_W / MM_MAP_W, mmSy = MM_H / MM_MAP_H;
+const MM_W=400, MM_H=300, MM_MAP_W=1600, MM_MAP_H=1200;
+const mmSx=MM_W/MM_MAP_W, mmSy=MM_H/MM_MAP_H;
 
 function buildMenuWalls() {
-  const w = [];
-  w.push({x:0,y:0,w:MM_MAP_W,h:20}); w.push({x:0,y:MM_MAP_H-20,w:MM_MAP_W,h:20});
-  w.push({x:0,y:0,w:20,h:MM_MAP_H}); w.push({x:MM_MAP_W-20,y:0,w:20,h:MM_MAP_H});
+  const W=MM_MAP_W, H=MM_MAP_H, w=[];
+  w.push({x:0,y:0,w:W,h:20}); w.push({x:0,y:H-20,w:W,h:20});
+  w.push({x:0,y:0,w:20,h:H}); w.push({x:W-20,y:0,w:20,h:H});
   const blocks = [
     [120,120,220,20],[120,120,20,100],[320,120,20,100],
     [400,120,220,20],[400,120,20,100],[600,120,20,100],
@@ -1168,8 +723,7 @@ function buildMenuWalls() {
     [960,800,20,200],[960,980,220,20],[1160,800,20,200],
     [1240,800,20,200],[1240,980,220,20],[1440,800,20,200],
     [560,720,140,20],[560,720,20,100],
-    [1000,260,140,20],[1120,260,20,100],
-    [740,540,160,50],
+    [1000,260,140,20],[1120,260,20,100],[740,540,160,50],
   ];
   for (const b of blocks) w.push({x:b[0],y:b[1],w:b[2],h:b[3]});
   return w;
@@ -1179,61 +733,26 @@ let mmScanY = 0;
 
 function renderMenuMinimap() {
   menuMMctx.imageSmoothingEnabled = false;
-  // floor
-  menuMMctx.fillStyle = '#1e2a2a';
-  menuMMctx.fillRect(0, 0, MM_W, MM_H);
-  // tile pattern
-  const ts = Math.round(40 * mmSx);
+  menuMMctx.fillStyle = '#1e2a2a'; menuMMctx.fillRect(0,0,MM_W,MM_H);
+  const ts = Math.round(40*mmSx);
   if (ts >= 2) {
-    for (let y = 0; y < MM_H; y += ts) {
-      for (let x = 0; x < MM_W; x += ts) {
-        if (((x/ts)+(y/ts)) % 2 === 0) {
-          menuMMctx.fillStyle = '#182020';
-          menuMMctx.fillRect(x, y, ts, ts);
-        }
+    for (let y=0;y<MM_H;y+=ts) for (let x=0;x<MM_W;x+=ts) {
+      if (((x/ts)+(y/ts))%2===0) {
+        menuMMctx.fillStyle='#182020'; menuMMctx.fillRect(x,y,ts,ts);
       }
     }
   }
-  // walls — shadow + base + edge highlight
   for (const wall of menuWalls) {
-    const wx = Math.floor(wall.x * mmSx), wy = Math.floor(wall.y * mmSy);
-    const ww = Math.max(1, Math.ceil(wall.w * mmSx)), wh = Math.max(1, Math.ceil(wall.h * mmSy));
-    menuMMctx.fillStyle = '#1a0e06';
-    menuMMctx.fillRect(wx+2, wy+2, ww, wh);
-    menuMMctx.fillStyle = '#6b4820';
-    menuMMctx.fillRect(wx, wy, ww, wh);
-    menuMMctx.fillStyle = '#9a6a30';
-    menuMMctx.fillRect(wx, wy, ww, Math.max(1, Math.ceil(mmSy*3)));
-    menuMMctx.fillRect(wx, wy, Math.max(1, Math.ceil(mmSx*3)), wh);
+    const wx=Math.floor(wall.x*mmSx), wy=Math.floor(wall.y*mmSy);
+    const ww=Math.max(1,Math.ceil(wall.w*mmSx)), wh=Math.max(1,Math.ceil(wall.h*mmSy));
+    menuMMctx.fillStyle='#1a0e06'; menuMMctx.fillRect(wx+2,wy+2,ww,wh);
+    menuMMctx.fillStyle='#6b4820'; menuMMctx.fillRect(wx,wy,ww,wh);
+    menuMMctx.fillStyle='#9a6a30';
+    menuMMctx.fillRect(wx,wy,ww,Math.max(1,Math.ceil(mmSy*3)));
+    menuMMctx.fillRect(wx,wy,Math.max(1,Math.ceil(mmSx*3)),wh);
   }
-  // animated cyan scan line
-  menuMMctx.fillStyle = 'rgba(122,252,255,0.06)';
-  menuMMctx.fillRect(0, mmScanY, MM_W, 4);
-  menuMMctx.fillStyle = 'rgba(122,252,255,0.20)';
-  menuMMctx.fillRect(0, mmScanY, MM_W, 1);
-  mmScanY = (mmScanY + 1) % MM_H;
+  menuMMctx.fillStyle='rgba(122,252,255,0.06)'; menuMMctx.fillRect(0,mmScanY,MM_W,4);
+  menuMMctx.fillStyle='rgba(122,252,255,0.20)'; menuMMctx.fillRect(0,mmScanY,MM_W,1);
+  mmScanY = (mmScanY+1)%MM_H;
 }
 setInterval(renderMenuMinimap, 40);
-
-function drawHeart(ctx, x, y) {
-  // pixel heart
-  const map = [
-    "0110110",
-    "1111111",
-    "1111111",
-    "0111110",
-    "0011100",
-    "0001000",
-  ];
-  const s = 3;
-  ctx.fillStyle = '#000';
-  ctx.fillRect(x - 11, y - 10, 22, 21);
-  for (let yy=0; yy<map.length; yy++) {
-    for (let xx=0; xx<map[0].length; xx++) {
-      if (map[yy][xx] === '1') {
-        ctx.fillStyle = (yy<2) ? '#ff5577' : '#ff3050';
-        ctx.fillRect(x - 10 + xx*s, y - 9 + yy*s, s, s);
-      }
-    }
-  }
-}
