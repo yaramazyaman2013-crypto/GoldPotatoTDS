@@ -292,7 +292,7 @@ function drawShirt(ctx) {
 
 // ===== Menu =====
 const $ = id => document.getElementById(id);
-const screens = ['menu','rooms','lobby','settings','game'];
+const screens = ['menu','rooms','lobby','settings','game','editor'];
 function show(id) {
   screens.forEach(s => $(s).classList.toggle('hidden', s !== id));
 }
