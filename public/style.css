@@ -28,8 +28,10 @@ canvas { image-rendering: pixelated; display: block; }
   align-items: stretch;
 }
 .menu-left {
-  padding: 60px 60px;
+  padding: 48px 60px 32px;
   display: flex; flex-direction: column; gap: 24px; align-items: flex-start;
+  justify-content: flex-start;
+  height: 100%;
 }
 .title {
   font-size: 64px;
@@ -213,14 +215,22 @@ canvas { image-rendering: pixelated; display: block; }
 }
 .ammo.reloading { color: #ff8a3c; }
 .ammo .max { color: #8a7a3a; font-size: 14px; }
-.minimap {
-  position: absolute;
-  bottom: 16px; left: 16px;
-  width: 280px; height: 210px;
-  background: rgba(10,10,20,0.85);
-  border: 3px solid #ffd24a;
-  box-shadow: 4px 4px 0 #000;
+
+.menu-map-wrap {
+  display: flex; flex-direction: column; gap: 6px;
+  margin-top: auto;
+  padding-bottom: 32px;
+}
+.menu-map-label {
+  font-size: 10px; color: #8a7aa6; letter-spacing: 2px;
+}
+#menuMinimap {
+  width: 380px; height: 285px;
+  background: #0a0e10;
+  border: 4px solid #ffd24a;
+  box-shadow: 6px 6px 0 #000;
   image-rendering: pixelated;
+  display: block;
 }
 .killfeed {
   position: absolute; top: 100px; right: 16px;
