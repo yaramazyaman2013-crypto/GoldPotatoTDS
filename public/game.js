@@ -1,5 +1,13 @@
 // ============ CLIENT ============
-const socket = io();
+// socket may fail if opened without server — keep a safe stub so menu still works
+let socket;
+try {
+  socket = io();
+  socket.on('connect_error', () => console.warn('Sunucuya bağlanılamıyor — multiplayer için "npm start" çalıştır.'));
+} catch (e) {
+  console.warn('Socket.IO yüklenemedi — index.html doğrudan açıldı mı? "npm start" ile sunucu çalıştır.');
+  socket = { id: 'offline', emit: () => {}, on: () => {} };
+}
 
 const COLORS = [
   '#ff5577', '#ff8a3c', '#ffd24a', '#7ad24a',
@@ -154,14 +162,16 @@ nameInput.addEventListener('input', () => {
 // character preview
 const previewCanvas = $('charPreview');
 const previewCtx = previewCanvas.getContext('2d');
-previewCanvas.width = 160; previewCanvas.height = 200;
+previewCanvas.width = 180; previewCanvas.height = 230;
 function renderPreview() {
+  previewCtx.imageSmoothingEnabled = false;
   previewCtx.fillStyle = '#2a1f44';
-  previewCtx.fillRect(0,0,160,200);
+  previewCtx.fillRect(0,0,180,230);
   // floor pattern
   previewCtx.fillStyle = '#3a2a5a';
-  for (let i=0;i<160;i+=16) previewCtx.fillRect(i,180,8,8);
-  drawRobot(previewCtx, 16, 0, 8, state.color);
+  for (let i=0;i<180;i+=16) previewCtx.fillRect(i,210,8,8);
+  // center the 16x20 sprite at scale 9 -> 144x180
+  drawRobot(previewCtx, 18, 20, 9, state.color);
 }
 renderPreview();
 
