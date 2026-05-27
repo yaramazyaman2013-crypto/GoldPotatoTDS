@@ -81,6 +81,15 @@
     </div>
   </div>
   <div id="dead" class="dead hidden">ELENDIN</div>
+  <div id="pauseMenu" class="screen hidden overlay">
+    <div class="panel">
+      <h2 class="title-sm">AYARLAR</h2>
+      <label>Ses<input id="pauseVolume" type="range" min="0" max="100" value="50"/></label>
+      <button id="btnResume" class="pixel-btn">DEVAM ET</button>
+      <button id="btnLeaveGame" class="pixel-btn">OYUNDAN CIK</button>
+      <div class="hint">ESC ile kapatabilirsin</div>
+    </div>
+  </div>
 </div>
 
 <script src="/socket.io/socket.io.js"></script>

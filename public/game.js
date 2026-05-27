@@ -320,7 +320,27 @@ $('btnWardrobe').addEventListener('click', () => palette.classList.toggle('hidde
 
 $('btnPlay').addEventListener('click', () => { show('rooms'); refreshRooms(); });
 $('btnSettings').addEventListener('click', () => show('settings'));
-$('setVolume').addEventListener('input', (e) => AUD.setVolume(parseInt(e.target.value,10)/100));
+function syncVolume(v) {
+  AUD.setVolume(v);
+  $('setVolume').value = Math.round(v * 100);
+  $('pauseVolume').value = Math.round(v * 100);
+}
+$('setVolume').addEventListener('input', (e) => syncVolume(parseInt(e.target.value,10)/100));
+$('pauseVolume').addEventListener('input', (e) => syncVolume(parseInt(e.target.value,10)/100));
+
+function togglePause() {
+  $('pauseMenu').classList.toggle('hidden');
+}
+$('btnResume').addEventListener('click', togglePause);
+$('btnLeaveGame').addEventListener('click', () => {
+  socket.emit('leaveRoom');
+  state.roomId = null; state.ownerId = null;
+  state.inGame = false; state.serverState = null;
+  $('pauseMenu').classList.add('hidden');
+  $('roundEnd').classList.add('hidden');
+  $('dead').classList.add('hidden');
+  show('menu');
+});
 $('btnBack1').addEventListener('click', () => show('menu'));
 $('btnBack2').addEventListener('click', () => show('menu'));
 
@@ -414,7 +434,18 @@ let mouseX = 0, mouseY = 0, mouseDown = false;
 window.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   if (k in keys) { keys[k] = true; sendInput(); }
-  if (k === 'r' && state.inGame) { socket.emit('reload'); AUD.reload(); }
+  if (k === 'r' && state.inGame) {
+    // only trigger if reload is actually possible (don't spam sound)
+    const me = state.serverState && state.serverState.players.find(p => p.id === socket.id);
+    if (me && me.alive && !me.reloading && me.ammo < (me.maxAmmo || 30)) {
+      socket.emit('reload');
+      // reload sound is played by state handler when server confirms reloading
+    }
+  }
+  if (e.key === 'Escape' && state.inGame) {
+    togglePause();
+    e.preventDefault();
+  }
 });
 window.addEventListener('keyup', e => {
   const k = e.key.toLowerCase();

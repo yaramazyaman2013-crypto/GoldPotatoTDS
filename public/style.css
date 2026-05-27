@@ -28,8 +28,9 @@ canvas { image-rendering: pixelated; display: block; }
   align-items: stretch;
 }
 .menu-left {
-  padding: 60px 60px;
+  padding: 60px;
   display: flex; flex-direction: column; gap: 24px; align-items: flex-start;
+  justify-content: center;
 }
 .title {
   font-size: 64px;
@@ -229,4 +230,7 @@ canvas { image-rendering: pixelated; display: block; }
   pointer-events: none;
 }
 .overlay { background: rgba(0,0,0,0.7); }
+#pauseMenu .panel { gap: 20px; min-width: 380px; }
+#pauseMenu label { display: flex; align-items: center; gap: 12px; font-size: 11px; }
+#pauseMenu input[type=range] { flex: 1; }
 #finalBoard .row { display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid #4a3a6a; }
