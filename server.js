@@ -776,10 +776,8 @@ function tick(room) {
         if (!p.alive) continue;
         const d2 = (p.x-b.x)**2 + (p.y-b.y)**2;
         if (d2 < C.ROCKET_AOE_R**2) {
-          // direct hit center = 1-shot kill; falloff with distance
-          const dist = Math.sqrt(d2);
-          const dmg = dist < 30 ? (C.HP_PER_LIFE + 1) : Math.ceil(C.HP_PER_LIFE * (1 - dist/C.ROCKET_AOE_R));
-          if (dmg > 0) applyDamage(p, dmg, b.owner);
+          // Fixed 10 damage regardless of distance
+          applyDamage(p, 10, b.owner);
         }
       }
       // splash damage to turrets
