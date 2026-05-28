@@ -58,7 +58,9 @@ const C = {
   TURRET_HP: 35,
   TURRET_MOVE_SPEED: 3.2, // px per tick (~128 px/sec at 40Hz) — visibly walking
   TURRET_RANGE: 280,
-  TURRET_FIRE_CD: 400,
+  TURRET_FIRE_CD: 120,           // rapid fire between shots
+  TURRET_MAG_SIZE: 40,           // shots before reload
+  TURRET_RELOAD_MS: 2000,        // 2sn reload
   TURRET_BULLET_DMG: 1,
   TURRET_BULLET_SPEED: 12,
   // Pet
@@ -592,8 +594,13 @@ function tick(room) {
     }
     if (target) {
       t.angle = Math.atan2(target.y-t.y, target.x-t.x);
-      if (now >= (t.nextFireAt || 0)) {
+      // Finish reload
+      if (t.ammo <= 0 && now >= (t.reloadEndsAt || 0)) {
+        t.ammo = C.TURRET_MAG_SIZE;
+      }
+      if (t.ammo > 0 && now >= (t.nextFireAt || 0)) {
         t.nextFireAt = now + C.TURRET_FIRE_CD;
+        t.ammo--;
         room.bullets.push({
           id: room.nextBulletId++, owner: t.owner, type: 'turret', dmg: C.TURRET_BULLET_DMG,
           x: t.x + Math.cos(t.angle)*16, y: t.y + Math.sin(t.angle)*16,
@@ -601,6 +608,7 @@ function tick(room) {
           vy: Math.sin(t.angle)*C.TURRET_BULLET_SPEED,
           life: 40,
         });
+        if (t.ammo === 0) t.reloadEndsAt = now + C.TURRET_RELOAD_MS;
       }
     }
   }
@@ -819,6 +827,7 @@ io.on('connection', (socket) => {
       id: room.nextTurretId++,
       owner: p.id, x: p.x, y: p.y,
       hp: C.TURRET_HP, angle: 0, nextFireAt: 0,
+      ammo: C.TURRET_MAG_SIZE, reloadEndsAt: 0,
     });
     p.turretReadyAt = Date.now() + C.ENGINEER_TURRET_CD;
   });
