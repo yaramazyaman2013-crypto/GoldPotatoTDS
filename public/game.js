@@ -792,16 +792,21 @@ function renderHUD() {
   }
 }
 
-// Stone texture (webp). Loaded once, used as repeating pattern for stone walls.
+// Stone texture (webp). Loaded once, scaled to a small tile, then used as
+// repeating pattern so it actually reads as bricks at wall scale (40px cells).
 const stoneImg = new Image();
 let stonePattern = null;
+const STONE_TILE = 64;
 stoneImg.onload = () => {
-  // Build a CanvasPattern once on an offscreen 2D context. Reused across renders.
-  const off = document.createElement('canvas').getContext('2d');
-  stonePattern = off.createPattern(stoneImg, 'repeat');
-  // Re-bake ground cache so existing stone walls pick up the texture
+  const tile = document.createElement('canvas');
+  tile.width = STONE_TILE; tile.height = STONE_TILE;
+  const tctx = tile.getContext('2d');
+  tctx.imageSmoothingEnabled = false;
+  tctx.drawImage(stoneImg, 0, 0, STONE_TILE, STONE_TILE);
+  stonePattern = tctx.createPattern(tile, 'repeat');
   if (state.inGame) rebuildGroundCache();
 };
+stoneImg.onerror = () => console.warn('[stone] texture failed to load');
 stoneImg.src = 'stone.webp';
 
 function drawTree(ctx, x, y, w, h) {
@@ -1522,12 +1527,28 @@ function renderBrushPicker() {
 }
 renderBrushPicker();
 
+// Password gate for map create/delete. Caches the correct entry per session
+// so the user is only prompted once.
+function requireMapPassword() {
+  const expected = window.MAP_EDITOR_PASSWORD;
+  if (!expected) return true;
+  if (sessionStorage.getItem('gwMapAuth') === expected) return true;
+  const got = prompt('Harita şifresi:');
+  if (got === expected) { sessionStorage.setItem('gwMapAuth', expected); return true; }
+  if (got !== null) alert('Şifre yanlış');
+  return false;
+}
+
 const btnEditMap = $('btnEditMap');
-if (btnEditMap) btnEditMap.addEventListener('click', () => openEditor(state.mapName !== 'default' ? state.mapName : null));
+if (btnEditMap) btnEditMap.addEventListener('click', () => {
+  if (!requireMapPassword()) return;
+  openEditor(state.mapName !== 'default' ? state.mapName : null);
+});
 const btnClearEditor = $('btnClearEditor');
 if (btnClearEditor) btnClearEditor.addEventListener('click', () => { EDITOR.grid = newGrid(); drawEditor(); });
 const btnSaveMap = $('btnSaveMap');
 if (btnSaveMap) btnSaveMap.addEventListener('click', async () => {
+  if (!requireMapPassword()) return;
   const name = ($('editorName').value || '').trim().slice(0, 24);
   if (!name || name === 'default') return alert('Geçerli bir isim gir');
   const walls = encodeGroundMeta(gridToWalls(EDITOR.grid), EDITOR.groundColor);
@@ -1545,8 +1566,10 @@ const btnCancelEditor = $('btnCancelEditor');
 if (btnCancelEditor) btnCancelEditor.addEventListener('click', () => show('rooms'));
 const btnDeleteMap = $('btnDeleteMap');
 if (btnDeleteMap) btnDeleteMap.addEventListener('click', async () => {
+  if (!requireMapPassword()) return;
   const name = ($('editorName').value || '').trim();
   if (!name || name === 'default') return;
+  if (!confirm(name + ' haritasını silmek istediğine emin misin?')) return;
   try {
     await sbDeleteMap(name);
     if (state.mapName === name) state.mapName = 'default';
