@@ -340,11 +340,11 @@ function drawHat(ctx, name, size) {
   if (!img || !img.complete || img.naturalWidth === 0) return;
   const r = size / 2;
   const aspect = img.naturalWidth / img.naturalHeight;
-  const hatW = Math.round(r * 1.7);
+  const hatW = Math.round(r * 1.5);
   const hatH = Math.round(hatW / aspect);
-  // sit on top of head, slightly left of center
-  const x = Math.round(-hatW / 2 - r * 0.18);
-  const y = Math.round(-r - hatH * 0.35);
+  // sit on top of head, centered, overlapping with crown
+  const x = Math.round(-hatW / 2);
+  const y = Math.round(-r - hatH * 0.55);
   ctx.drawImage(img, x, y, hatW, hatH);
 }
 
