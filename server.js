@@ -154,7 +154,7 @@ function getMapWalls(mapName) {
   return walls;
 }
 
-const WALL_KINDS = ['stone','wood','brick','mesh'];
+const WALL_KINDS = ['stone','wood','brick','mesh','tree'];
 const MESH_HP = 4;
 function sanitizeWalls(walls) {
   const out = [];
@@ -370,6 +370,7 @@ function startRound(room) {
     endsAt: room.roundEndsAt,
     mapW: C.MAP_W, mapH: C.MAP_H, walls: room.walls,
     mapName: room.mapName,
+    groundColor: room.groundColor || '#4a6a3a',
   });
   if (room.tickHandle) clearInterval(room.tickHandle);
   room.tickHandle = setInterval(() => tick(room), C.TICK_MS);
@@ -662,13 +663,16 @@ const socketRoom = new Map(); // socketId -> roomCode
 io.on('connection', (socket) => {
   console.log('[+]', socket.id);
 
-  socket.on('createRoom', ({name, color, cls, mapName, customMap}, ack) => {
+  socket.on('createRoom', ({name, color, cls, mapName, customMap, groundColor}, ack) => {
     leaveCurrentRoom(socket);
     // Host may ship a custom map's walls inline (fetched from Supabase).
     if (customMap && Array.isArray(customMap) && mapName) {
       savedMaps.set(mapName, sanitizeWalls(customMap));
     }
     const room = newRoom(socket.id, name, color, cls, mapName);
+    if (typeof groundColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(groundColor)) {
+      room.groundColor = groundColor;
+    }
     socketRoom.set(socket.id, room.code);
     socket.join(room.code);
     ack && ack({
