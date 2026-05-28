@@ -244,9 +244,9 @@ const state = {
 };
 
 const CLASS_INFO = {
-  cyber:    { label: 'CYBER',    desc: 'Her 30sn +3 füze',          color: '#7afcff' },
-  engineer: { label: 'MUHENDIS', desc: '90sn: Taret koy (B tuşu)',   color: '#4a8aff' },
-  medic:    { label: 'DOKTOR',   desc: '3.5dk: Heal pet (V tuşu)',   color: '#7ad24a' },
+  cyber:    { label: 'CYBER',    desc: 'Her 50sn +2 füze',          color: '#7afcff' },
+  engineer: { label: 'MUHENDIS', desc: '70sn: Taret koy (B tuşu)',   color: '#4a8aff' },
+  medic:    { label: 'DOKTOR',   desc: '65sn: Heal pet (V tuşu)',    color: '#7ad24a' },
   tank:     { label: 'TANK',     desc: '3 kill → 20sn tank modu',    color: '#ff5577' },
 };
 
@@ -685,6 +685,10 @@ function makeHatSwatch(name) {
 function loadHats() {
   hatPalette.innerHTML = '';
   addCloseBtn(hatPalette);
+  const hint = document.createElement('div');
+  hint.className = 'hat-hint';
+  hint.textContent = 'SAPKAYI SURUKLE • TEKERLEK = BUYUT/KUCULT';
+  hatPalette.appendChild(hint);
   const none = document.createElement('div');
   none.className = 'none-opt';
   none.textContent = 'YOK';

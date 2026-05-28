@@ -143,6 +143,14 @@ canvas { image-rendering: pixelated; display: block; }
   font-family: "Press Start 2P", monospace; font-size: 10px;
 }
 .hat-palette .none-opt.selected { border-color: #ffd24a; }
+.hat-hint {
+  grid-column: 1 / -1;
+  color: #ffd24a;
+  font-family: "Press Start 2P", monospace;
+  font-size: 9px;
+  text-align: center;
+  padding: 4px 0 6px;
+}
 #charPreview { cursor: grab; }
 #charPreview:active { cursor: grabbing; }
 .palette-close {
