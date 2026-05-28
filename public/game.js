@@ -223,20 +223,21 @@ const CLASS_INFO = {
 };
 
 // ===== Robot pixel art =====
-// Cute round blob with two big eyes. Legend:
+// Cute round blob with two big eyes. Perfectly symmetric (col i mirrors col 15-i).
+// Legend:
 //   0=empty, 1=outline (dark), 2=body color, 3=highlight (lighter shade),
 //   4=eye white, 5=eye pupil (dark), 6=cheek blush, 7=mouth
 const ROBOT_SPRITE = [
-  "0000011111100000","0000122222210000",
-  "0001222333222100","0012223333322210",
-  "0122223333322221","0122444222444221",
-  "1224444222444421","1224554222455421",
-  "1224554222455421","1224444222444421",
-  "0122444222444221","0122226772222210",
-  "0122222777222210","0162222222222610",
-  "0016222222226100","0001622222261000",
-  "0000162222610000","0000016226100000",
-  "0000001661000000","0000000110000000",
+  "0000001111000000","0000112222110000",
+  "0001223333221000","0012333333332100",
+  "0123333333333210","1233333333333321",
+  "1221113333111221","1214441221444121",
+  "1214451221544121","1214551221554121",
+  "1221113333111221","1222222222222221",
+  "1262227777222621","1262277777722621",
+  "1222222772222221","0122222222222210",
+  "0011222222221100","0001112222111000",
+  "0000111111110000","0000000000000000",
 ];
 
 function drawRobot(ctx, ox, oy, scale, color) {
@@ -272,51 +273,19 @@ function drawRobot(ctx, ox, oy, scale, color) {
 // Cache robot body sprites per color. Each is drawn once to an offscreen
 // canvas; the render loop then does a single drawImage + rotate instead
 // of 15+ fillRect calls + ctx.ellipse per player per frame.
+// In-game cute character: drawn once per color into an offscreen canvas
+// using the same high-fidelity drawCuteCharacter function as the menu.
+// Top-down view doesn't rotate (creature always "faces forward").
 const _robotBodyCache = new Map();
-const _ROBOT_CX = 22, _ROBOT_CY = 20, _ROBOT_CW = 50, _ROBOT_CH = 40;
-// Helper: draw a filled pixel disc (no anti-aliasing)
-function _drawPixelDisc(ctx, cx, cy, r, fill) {
-  ctx.fillStyle = fill;
-  for (let y = -r; y <= r; y++) {
-    for (let x = -r; x <= r; x++) {
-      if (x*x + y*y <= r*r) ctx.fillRect(cx + x, cy + y, 1, 1);
-    }
-  }
-}
+const _ROBOT_CW = 60, _ROBOT_CH = 80;
+const _ROBOT_CX = 30, _ROBOT_CY = 46;  // body center within the cache canvas
 function getRobotBody(color) {
   if (_robotBodyCache.has(color)) return _robotBodyCache.get(color);
   const cv = document.createElement('canvas');
   cv.width = _ROBOT_CW; cv.height = _ROBOT_CH;
   const c = cv.getContext('2d');
-  c.imageSmoothingEnabled = false;
-  const cx = _ROBOT_CX, cy = _ROBOT_CY;
-  // lighter shade for highlight
-  const n = parseInt((color||'#ff5577').slice(1), 16);
-  const lr = Math.min(255, ((n>>16)&255) + 50);
-  const lg = Math.min(255, ((n>>8)&255) + 50);
-  const lb = Math.min(255, (n&255) + 50);
-  const light = '#' + ((lr<<16)|(lg<<8)|lb).toString(16).padStart(6,'0');
-  // outline + body (round blob)
-  _drawPixelDisc(c, cx, cy, 14, '#0a0a0a');
-  _drawPixelDisc(c, cx, cy, 12, color);
-  // soft top-left highlight
-  _drawPixelDisc(c, cx-3, cy-4, 5, light);
-  // two big eyes — facing the "front" (positive X = angle 0)
-  // whites
-  _drawPixelDisc(c, cx+3, cy-5, 4, '#0a0a0a');
-  _drawPixelDisc(c, cx+3, cy+5, 4, '#0a0a0a');
-  _drawPixelDisc(c, cx+3, cy-5, 3, '#ffffff');
-  _drawPixelDisc(c, cx+3, cy+5, 3, '#ffffff');
-  // pupils (slightly forward = looking ahead)
-  _drawPixelDisc(c, cx+5, cy-5, 2, '#0a0a14');
-  _drawPixelDisc(c, cx+5, cy+5, 2, '#0a0a14');
-  // tiny eye glints
-  c.fillStyle = '#ffffff';
-  c.fillRect(cx+6, cy-6, 1, 1);
-  c.fillRect(cx+6, cy+4, 1, 1);
-  // pink cheek blush at the rear corners
-  _drawPixelDisc(c, cx-6, cy-7, 2, '#ff8aa0');
-  _drawPixelDisc(c, cx-6, cy+7, 2, '#ff8aa0');
+  c.imageSmoothingEnabled = true;
+  drawCuteCharacter(c, _ROBOT_CX, _ROBOT_CY, 36, color);
   _robotBodyCache.set(color, cv);
   return cv;
 }
@@ -324,11 +293,7 @@ function getRobotBody(color) {
 function drawRobotTopDown(ctx, x, y, color, angle, alive=true) {
   ctx.save();
   ctx.translate(Math.floor(x), Math.floor(y));
-  // cheap shadow rectangle (avoids expensive ctx.ellipse + beginPath)
-  ctx.fillStyle = 'rgba(0,0,0,0.38)';
-  ctx.fillRect(-18, -6, 36, 10);
   if (!alive) ctx.globalAlpha = 0.35;
-  ctx.rotate(angle);
   ctx.drawImage(getRobotBody(color), -_ROBOT_CX, -_ROBOT_CY);
   ctx.restore();
 }
@@ -367,16 +332,120 @@ nameInput.addEventListener('input', () => {
   if (state.roomId) socket.emit('chatName', { name: state.name });
 });
 
+// High-fidelity ("128-bit") cute character: smooth gradients, anti-aliased
+// arcs, antenna, glints — used for menu preview + palette swatches.
+function drawCuteCharacter(ctx, cx, cy, size, color) {
+  const r = size / 2;
+  ctx.save();
+  ctx.translate(cx, cy);
+  // shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.32)';
+  ctx.beginPath();
+  ctx.ellipse(0, r*0.92, r*0.95, r*0.22, 0, 0, Math.PI*2);
+  ctx.fill();
+  // derive shades from color
+  const n = parseInt((color||'#ff5577').slice(1), 16);
+  const cR = (n>>16)&255, cG = (n>>8)&255, cB = n&255;
+  const lr = Math.min(255, cR + 70), lg = Math.min(255, cG + 70), lb = Math.min(255, cB + 70);
+  const dr = Math.max(0, cR - 50),  dg = Math.max(0, cG - 50),  db = Math.max(0, cB - 50);
+  const light = `rgb(${lr},${lg},${lb})`;
+  const dark  = `rgb(${dr},${dg},${db})`;
+  // body with radial gradient
+  const grad = ctx.createRadialGradient(-r*0.35, -r*0.45, r*0.05, 0, 0, r*1.05);
+  grad.addColorStop(0, light);
+  grad.addColorStop(0.55, color);
+  grad.addColorStop(1, dark);
+  ctx.fillStyle = grad;
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = '#0a0a14';
+  ctx.lineWidth = Math.max(2, r*0.07);
+  ctx.stroke();
+  // top shiny highlight
+  ctx.fillStyle = 'rgba(255,255,255,0.28)';
+  ctx.beginPath();
+  ctx.ellipse(-r*0.32, -r*0.5, r*0.4, r*0.18, -0.35, 0, Math.PI*2);
+  ctx.fill();
+  // cheek blushes (under eyes)
+  ctx.fillStyle = 'rgba(255,138,160,0.85)';
+  ctx.beginPath(); ctx.arc(-r*0.55, r*0.2, r*0.16, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc( r*0.55, r*0.2, r*0.16, 0, Math.PI*2); ctx.fill();
+  // eyes (symmetric)
+  const eyeX = r*0.32, eyeY = -r*0.1, eyeR = r*0.3;
+  // whites
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(-eyeX, eyeY, eyeR, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc( eyeX, eyeY, eyeR, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = '#0a0a14';
+  ctx.lineWidth = Math.max(1.5, r*0.045);
+  ctx.beginPath(); ctx.arc(-eyeX, eyeY, eyeR, 0, Math.PI*2); ctx.stroke();
+  ctx.beginPath(); ctx.arc( eyeX, eyeY, eyeR, 0, Math.PI*2); ctx.stroke();
+  // pupils (slightly off-center toward face center — adorable cross-look)
+  const pupilR = eyeR * 0.62;
+  const pupilOffX = r*0.06, pupilOffY = r*0.04;
+  ctx.fillStyle = '#0a0a14';
+  ctx.beginPath(); ctx.arc(-eyeX + pupilOffX, eyeY + pupilOffY, pupilR, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc( eyeX - pupilOffX, eyeY + pupilOffY, pupilR, 0, Math.PI*2); ctx.fill();
+  // big glint upper-outer of each pupil (symmetric)
+  ctx.fillStyle = '#fff';
+  const glintR = pupilR * 0.42;
+  ctx.beginPath(); ctx.arc(-eyeX - r*0.04, eyeY - r*0.06, glintR, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc( eyeX + r*0.04, eyeY - r*0.06, glintR, 0, Math.PI*2); ctx.fill();
+  // tiny secondary glints
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.beginPath(); ctx.arc(-eyeX + r*0.1, eyeY + r*0.1, glintR*0.5, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc( eyeX - r*0.1, eyeY + r*0.1, glintR*0.5, 0, Math.PI*2); ctx.fill();
+  // smile
+  ctx.strokeStyle = '#2a1010';
+  ctx.lineWidth = Math.max(2, r*0.075);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.arc(0, r*0.32, r*0.2, 0.25, Math.PI - 0.25);
+  ctx.stroke();
+  // antenna with golden bulb (centered for symmetry)
+  ctx.strokeStyle = '#0a0a14';
+  ctx.lineWidth = Math.max(2, r*0.06);
+  ctx.beginPath();
+  ctx.moveTo(0, -r + r*0.05);
+  ctx.quadraticCurveTo(-r*0.04, -r*1.18, 0, -r*1.32);
+  ctx.stroke();
+  const bulbGrad = ctx.createRadialGradient(-r*0.04, -r*1.38, r*0.02, 0, -r*1.35, r*0.14);
+  bulbGrad.addColorStop(0, '#fff5b8');
+  bulbGrad.addColorStop(0.5, '#ffd24a');
+  bulbGrad.addColorStop(1, '#c08020');
+  ctx.fillStyle = bulbGrad;
+  ctx.beginPath(); ctx.arc(0, -r*1.42, r*0.14, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = '#0a0a14';
+  ctx.lineWidth = Math.max(1.5, r*0.045);
+  ctx.beginPath(); ctx.arc(0, -r*1.42, r*0.14, 0, Math.PI*2); ctx.stroke();
+  ctx.restore();
+}
+
 const previewCanvas = $('charPreview');
 const previewCtx = previewCanvas.getContext('2d');
-previewCanvas.width = 180; previewCanvas.height = 230;
+previewCanvas.width = 360; previewCanvas.height = 460;
 function renderPreview() {
-  previewCtx.imageSmoothingEnabled = false;
-  previewCtx.fillStyle = '#2a1f44';
-  previewCtx.fillRect(0,0,180,230);
-  previewCtx.fillStyle = '#3a2a5a';
-  for (let i=0;i<180;i+=16) previewCtx.fillRect(i,210,8,8);
-  drawRobot(previewCtx, 18, 20, 9, state.color);
+  previewCtx.imageSmoothingEnabled = true;
+  // background panel
+  const bg = previewCtx.createLinearGradient(0, 0, 0, 460);
+  bg.addColorStop(0, '#3a2a5a');
+  bg.addColorStop(1, '#2a1f44');
+  previewCtx.fillStyle = bg;
+  previewCtx.fillRect(0,0,360,460);
+  // soft floor checker
+  previewCtx.fillStyle = '#1f1530';
+  for (let y = 380; y < 460; y += 16) {
+    for (let x = 0; x < 360; x += 16) {
+      if (((x/16)+(y/16))%2===0) previewCtx.fillRect(x, y, 16, 16);
+    }
+  }
+  // floor shadow gradient
+  const sh = previewCtx.createLinearGradient(0, 360, 0, 460);
+  sh.addColorStop(0, 'rgba(0,0,0,0)');
+  sh.addColorStop(1, 'rgba(0,0,0,0.35)');
+  previewCtx.fillStyle = sh;
+  previewCtx.fillRect(0, 360, 360, 100);
+  // character centered, large
+  drawCuteCharacter(previewCtx, 180, 240, 220, state.color);
 }
 renderPreview();
 drawShirt($('shirtIcon').getContext('2d'));
@@ -384,8 +453,10 @@ drawShirt($('shirtIcon').getContext('2d'));
 const palette = $('colorPalette');
 COLORS.forEach(c => {
   const cv = document.createElement('canvas');
-  cv.width = 16; cv.height = 20;
-  drawRobot(cv.getContext('2d'), 0, 0, 1, c);
+  cv.width = 56; cv.height = 70;
+  const cctx = cv.getContext('2d');
+  cctx.imageSmoothingEnabled = true;
+  drawCuteCharacter(cctx, 28, 38, 42, c);
   if (c === state.color) cv.classList.add('selected');
   cv.addEventListener('click', () => {
     state.color = c;
