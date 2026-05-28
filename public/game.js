@@ -244,10 +244,10 @@ const state = {
 };
 
 const CLASS_INFO = {
-  cyber:    { label: 'CYBER',    desc: 'Her 50sn +2 füze',          color: '#7afcff' },
-  engineer: { label: 'MUHENDIS', desc: '70sn: Taret koy (B tuşu)',   color: '#4a8aff' },
-  medic:    { label: 'DOKTOR',   desc: '65sn: Heal pet (V tuşu)',    color: '#7ad24a' },
-  tank:     { label: 'TANK',     desc: '3 kill → 20sn tank modu',    color: '#ff5577' },
+  cyber:    { label: 'CYBER',    desc: '1 füze ile başlar, her 50sn +2 füze',     color: '#7afcff' },
+  engineer: { label: 'MUHENDIS', desc: '70sn: Taret (B) • 35 mermi, 3sn reload', color: '#4a8aff' },
+  medic:    { label: 'DOKTOR',   desc: '65sn: Heal pet (V) • 2.5dk +1 can',      color: '#7ad24a' },
+  tank:     { label: 'TANK',     desc: '3 kill → 30sn tank modu (20 HP)',        color: '#ff5577' },
 };
 
 // ===== Robot pixel art =====
