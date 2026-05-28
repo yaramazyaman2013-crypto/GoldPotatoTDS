@@ -55,12 +55,13 @@ const C = {
   MAX_ROCKET_PICKUPS: 3,
   ROCKET_CHARGES: 2,
   ROCKET_SPEED: 11,
+  CYBER_ROCKET_SPEED: 14,
   ROCKET_R: 6,
   ROCKET_FIRE_COOLDOWN: 320,
   ROCKET_AOE_R: 70,
   // Classes
   CYBER_ROCKET_INTERVAL: 50 * 1000,
-  CYBER_ROCKET_PER_INTERVAL: 2,
+  CYBER_ROCKET_PER_INTERVAL: 3,
   CYBER_START_ROCKETS: 1,
   ENGINEER_TURRET_CD:    70 * 1000,
   MEDIC_PET_CD:          65 * 1000,
@@ -68,6 +69,11 @@ const C = {
   TANK_KILLS_REQUIRED:   3,
   TANK_DURATION:         30 * 1000,
   TANK_HP_BOOST:         25,
+  // Pyro flame weapon
+  PYRO_FLAME_CD: 50,             // ms between flame shots (rapid fire)
+  PYRO_FLAME_SPEED: 18,
+  PYRO_FLAME_LIFE: 11,           // ~11 ticks * 18 speed = ~200px range
+  PYRO_FLAME_DMG: 3,
   // Soda pickup (rare, +3 HP)
   SODA_SPAWN_MS:   45 * 1000,
   MAX_SODAS:       2,
@@ -75,20 +81,19 @@ const C = {
   SODA_SPAWN_CHANCE: 0.7,
   // Turret
   TURRET_HP: 40,
-  TURRET_MOVE_SPEED: 3.2, // px per tick (~128 px/sec at 40Hz) — visibly walking
+  TURRET_MOVE_SPEED: 3.2,
   TURRET_RANGE: 460,
-  TURRET_FIRE_CD: 120,           // rapid fire between shots
-  TURRET_MAG_SIZE: 25,           // shots before reload
-  TURRET_RELOAD_MS: 3000,        // 3sn reload
+  TURRET_FIRE_CD: 120,
+  TURRET_MAG_SIZE: 25,
+  TURRET_RELOAD_MS: 4500,
   TURRET_BULLET_DMG: 2,
   TURRET_BULLET_SPEED: 12,
   // Pet
   PET_HP: 30,
-  // Pet (heal totem)
-  PET_DURATION: 60 * 1000,
+  PET_DURATION: 10 * 1000,
   PET_HEAL_R: 35,
-  PET_HEAL_PER_TICK: 1,      // hp per server tick (~25ms) → fast regen
-  PET_HEAL_EVERY: 250,       // ms between heal ticks
+  PET_HEAL_PER_TICK: 1,
+  PET_HEAL_EVERY: 250,
 };
 
 // ============================================================
@@ -311,7 +316,7 @@ function newRoom(ownerSocketId, ownerName, ownerColor, ownerCls, mapName) {
   return room;
 }
 
-const VALID_CLASSES = ['cyber','engineer','medic','tank'];
+const VALID_CLASSES = ['cyber','engineer','medic','tank','pyro'];
 
 function addPlayer(room, id, name, color, cls) {
   const s = randomSpawnIn(room.walls);
@@ -550,27 +555,39 @@ function tick(room) {
     // Right click = rocket (if available)
     if (p.rightDown && p.fireCd <= 0 && p.rockets > 0) {
       p.fireCd = C.ROCKET_FIRE_COOLDOWN; p.rockets--;
+      const rspeed = p.cls === 'cyber' ? C.CYBER_ROCKET_SPEED : C.ROCKET_SPEED;
       const m = 22;
       room.bullets.push({
-        id: room.nextBulletId++, owner: p.id, type: 'rocket',
+        id: room.nextBulletId++, owner: p.id, type: 'rocket', ownerCls: p.cls,
         x: p.x+Math.cos(p.angle)*m, y: p.y+Math.sin(p.angle)*m,
-        vx: Math.cos(p.angle)*C.ROCKET_SPEED, vy: Math.sin(p.angle)*C.ROCKET_SPEED,
+        vx: Math.cos(p.angle)*rspeed, vy: Math.sin(p.angle)*rspeed,
         angle: p.angle, life: 70,
       });
     }
-    // Left click = bullet
-    if (p.leftDown && p.fireCd <= 0 && p.ammo > 0 && !p.reloading) {
-      p.fireCd = isTank ? Math.floor(C.FIRE_COOLDOWN * 0.6) : C.FIRE_COOLDOWN;
-      p.ammo--;
-      const m = 20;
-      const bulletDmg = isTank ? 2 : 1;
-      room.bullets.push({
-        id: room.nextBulletId++, owner: p.id, type: 'bullet', dmg: bulletDmg,
-        x: p.x+Math.cos(p.angle)*m, y: p.y+Math.sin(p.angle)*m,
-        vx: Math.cos(p.angle)*C.BULLET_SPEED, vy: Math.sin(p.angle)*C.BULLET_SPEED,
-        life: 45,
-      });
-      if (p.ammo === 0) { p.reloading = true; p.reloadEndsAt = now + C.RELOAD_MS; }
+    // Left click = bullet (pyro uses flame instead)
+    if (p.leftDown && p.fireCd <= 0 && !p.reloading) {
+      if (p.cls === 'pyro') {
+        p.fireCd = C.PYRO_FLAME_CD;
+        const m = 20;
+        room.bullets.push({
+          id: room.nextBulletId++, owner: p.id, type: 'flame', dmg: C.PYRO_FLAME_DMG,
+          x: p.x+Math.cos(p.angle)*m, y: p.y+Math.sin(p.angle)*m,
+          vx: Math.cos(p.angle)*C.PYRO_FLAME_SPEED, vy: Math.sin(p.angle)*C.PYRO_FLAME_SPEED,
+          life: C.PYRO_FLAME_LIFE,
+        });
+      } else if (p.ammo > 0) {
+        p.fireCd = isTank ? Math.floor(C.FIRE_COOLDOWN * 0.6) : C.FIRE_COOLDOWN;
+        p.ammo--;
+        const m = 20;
+        const bulletDmg = isTank ? 2 : 1;
+        room.bullets.push({
+          id: room.nextBulletId++, owner: p.id, type: 'bullet', dmg: bulletDmg,
+          x: p.x+Math.cos(p.angle)*m, y: p.y+Math.sin(p.angle)*m,
+          vx: Math.cos(p.angle)*C.BULLET_SPEED, vy: Math.sin(p.angle)*C.BULLET_SPEED,
+          life: 45,
+        });
+        if (p.ammo === 0) { p.reloading = true; p.reloadEndsAt = now + C.RELOAD_MS; }
+      }
     }
     for (let i = room.hearts.length-1; i >= 0; i--) {
       const h = room.hearts[i];
@@ -773,7 +790,7 @@ function tick(room) {
 
     if (detonated && isRocket) {
       // splash damage
-      io.to(room.code).emit('explosion', {x: b.x, y: b.y, r: C.ROCKET_AOE_R});
+      io.to(room.code).emit('explosion', {x: b.x, y: b.y, r: C.ROCKET_AOE_R, color: b.ownerCls === 'cyber' ? 'cyber' : null});
       for (const p of room.players.values()) {
         if (!p.alive) continue;
         const d2 = (p.x-b.x)**2 + (p.y-b.y)**2;
