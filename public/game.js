@@ -627,7 +627,11 @@ socket.on('roundStart', (data) => {
 
 socket.on('wallBroken', ({id}) => {
   const i = state.walls.findIndex(w => w.id === id);
-  if (i >= 0) state.walls.splice(i, 1);
+  if (i >= 0) {
+    const w = state.walls[i];
+    state.walls.splice(i, 1);
+    patchGroundCache(w.x, w.y, w.w, w.h);
+  }
 });
 
 // ===== Client-side interpolation buffer =====
@@ -996,7 +1000,52 @@ function rebuildGroundCache() {
       }
     }
   }
+  // walls baked in once; broken walls are patched via patchGroundCache
+  for (const w of (state.walls || [])) {
+    drawWall(c, w.x, w.y, w.w, w.h, w.kind || 'stone');
+  }
   groundCache = cv;
+}
+
+// Erase a broken wall from the cache without rebuilding the whole canvas:
+// repaint just the ground tiles over the wall's rect, then repaint any
+// remaining walls that overlap that area.
+function patchGroundCache(wx, wy, ww, wh) {
+  if (!groundCache) return;
+  const c = groundCache.getContext('2d');
+  const base = state.groundColor || '#4a6a3a';
+  function shade(hex, f) {
+    const n = parseInt(hex.slice(1), 16);
+    const r = Math.max(0, Math.min(255, ((n>>16)&255) + f|0));
+    const g = Math.max(0, Math.min(255, ((n>>8)&255) + f|0));
+    const b = Math.max(0, Math.min(255, (n&255) + f|0));
+    return '#' + ((r<<16)|(g<<8)|b).toString(16).padStart(6,'0');
+  }
+  const dark = shade(base, -16);
+  const ts = 32;
+  const tx0 = Math.floor(wx / ts), ty0 = Math.floor(wy / ts);
+  const tx1 = Math.ceil((wx + ww) / ts), ty1 = Math.ceil((wy + wh) / ts);
+  for (let ty = ty0; ty < ty1; ty++) {
+    for (let tx = tx0; tx < tx1; tx++) {
+      const hash = ((tx*73856093) ^ (ty*19349663)) >>> 0;
+      const isDirt = (hash % 17) === 0;
+      let col = isDirt ? '#6b4a2a' : ((tx+ty)%2===0 ? base : dark);
+      c.fillStyle = col;
+      c.fillRect(tx*ts, ty*ts, ts, ts);
+      if (!isDirt && (hash % 23) === 0) {
+        c.fillStyle = shade(base, +24);
+        c.fillRect(tx*ts+6, ty*ts+10, 2, 4);
+        c.fillRect(tx*ts+10, ty*ts+8, 2, 6);
+        c.fillRect(tx*ts+14, ty*ts+12, 2, 4);
+      }
+    }
+  }
+  // repaint any walls that overlap the patched region
+  for (const w of (state.walls || [])) {
+    if (w.x + w.w < wx || w.x > wx + ww) continue;
+    if (w.y + w.h < wy || w.y > wy + wh) continue;
+    drawWall(c, w.x, w.y, w.w, w.h, w.kind || 'stone');
+  }
 }
 
 // ===== Player sprite cache =====
@@ -1067,16 +1116,6 @@ function render() {
       gctx.drawImage(groundCache, srcX, srcY, srcW, srcH, dstX, dstY, srcW, srcH);
     }
   }
-  // Draw walls inline so broken mesh cells disappear immediately without
-  // needing to rebuild the 1600x1200 ground cache (which caused frame freezes).
-  if (state.walls) {
-    for (const w of state.walls) {
-      const wx = w.x - camX, wy = w.y - camY;
-      if (wx + w.w < 0 || wy + w.h < 0 || wx > W || wy > H) continue;
-      drawWall(gctx, wx, wy, w.w, w.h, w.kind || 'stone');
-    }
-  }
-
   // hearts and rocket pickups
   for (const h of ss.hearts) drawHeart(gctx, h.x-camX, h.y-camY);
   if (ss.rocketPickups) {
