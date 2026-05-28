@@ -345,12 +345,33 @@ function spawnRocketPickup(room) {
 }
 
 function cloneWalls(src) {
-  // Per-round room copy: mesh walls get hp; assign ids; build spatial index
-  const out = src.map((w, i) => ({
-    id: i + 1, x: w.x, y: w.y, w: w.w, h: w.h,
-    kind: w.kind || 'stone',
-    hp: w.kind === 'mesh' ? MESH_HP : Infinity,
-  }));
+  // Per-round room copy: mesh walls get hp; assign ids; build spatial index.
+  // Mesh rects (legacy maps saved before NO_MERGE) get split into 1-cell
+  // pieces so destroying one cell doesn't take out the whole row.
+  const MESH_CELL = 24;
+  const out = [];
+  let nextId = 1;
+  for (const w of src) {
+    if (w.kind === 'mesh' && (w.w > MESH_CELL || w.h > MESH_CELL)) {
+      const cols = Math.max(1, Math.round(w.w / MESH_CELL));
+      const rows = Math.max(1, Math.round(w.h / MESH_CELL));
+      const cw = w.w / cols, ch = w.h / rows;
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          out.push({
+            id: nextId++, x: w.x + c*cw, y: w.y + r*ch, w: cw, h: ch,
+            kind: 'mesh', hp: MESH_HP,
+          });
+        }
+      }
+    } else {
+      out.push({
+        id: nextId++, x: w.x, y: w.y, w: w.w, h: w.h,
+        kind: w.kind || 'stone',
+        hp: w.kind === 'mesh' ? MESH_HP : Infinity,
+      });
+    }
+  }
   Object.defineProperty(out, '__index', {
     value: buildWallIndex(out), enumerable: false, configurable: true, writable: true,
   });
