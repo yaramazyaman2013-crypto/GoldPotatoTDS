@@ -143,6 +143,8 @@ canvas { image-rendering: pixelated; display: block; }
   font-family: "Press Start 2P", monospace; font-size: 10px;
 }
 .hat-palette .none-opt.selected { border-color: #ffd24a; }
+#charPreview { cursor: grab; }
+#charPreview:active { cursor: grabbing; }
 .palette-close {
   position: absolute;
   top: -14px; right: -14px;
