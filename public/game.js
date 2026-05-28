@@ -307,14 +307,15 @@ function drawRobot(ctx, ox, oy, scale, color) {
 const _robotBodyCache = new Map();
 const _ROBOT_CW = 60, _ROBOT_CH = 80;
 const _ROBOT_CX = 30, _ROBOT_CY = 46;  // body center within the cache canvas
-function getRobotBody(color) {
-  if (_robotBodyCache.has(color)) return _robotBodyCache.get(color);
+function getRobotBody(color, withAntenna = true) {
+  const key = color + (withAntenna ? '|a' : '|n');
+  if (_robotBodyCache.has(key)) return _robotBodyCache.get(key);
   const cv = document.createElement('canvas');
   cv.width = _ROBOT_CW; cv.height = _ROBOT_CH;
   const c = cv.getContext('2d');
   c.imageSmoothingEnabled = true;
-  drawCuteCharacter(c, _ROBOT_CX, _ROBOT_CY, 36, color);
-  _robotBodyCache.set(color, cv);
+  drawCuteCharacter(c, _ROBOT_CX, _ROBOT_CY, 36, color, withAntenna);
+  _robotBodyCache.set(key, cv);
   return cv;
 }
 
@@ -342,9 +343,9 @@ function drawHat(ctx, name, size) {
   const aspect = img.naturalWidth / img.naturalHeight;
   const hatW = Math.round(r * 1.5);
   const hatH = Math.round(hatW / aspect);
-  // sit on top of head, centered, overlapping with crown
+  // Anchor hat by its bottom: works for any aspect ratio.
   const x = Math.round(-hatW / 2 + r * 0.18);
-  const y = Math.round(-r - hatH * 0.75);
+  const y = Math.round(-r * 0.35 - hatH);
   ctx.drawImage(img, x, y, hatW, hatH);
 }
 
@@ -382,7 +383,7 @@ function drawRobotTopDown(ctx, x, y, color, angle, alive=true, id=null, wx=0, wy
     ctx.rotate(-moveAng);
     ctx.translate(0, -bob);
   }
-  ctx.drawImage(getRobotBody(color), -_ROBOT_CX, -_ROBOT_CY);
+  ctx.drawImage(getRobotBody(color, !hat), -_ROBOT_CX, -_ROBOT_CY);
   if (hat) drawHat(ctx, hat, 36);
   // draw weapon on top of character, rotated toward cursor
   if (_gunImg.complete && _gunImg.naturalWidth > 0) {
@@ -432,7 +433,7 @@ nameInput.addEventListener('input', () => {
 
 // High-fidelity ("128-bit") cute character: smooth gradients, anti-aliased
 // arcs, antenna, glints — used for menu preview + palette swatches.
-function drawCuteCharacter(ctx, cx, cy, size, color) {
+function drawCuteCharacter(ctx, cx, cy, size, color, withAntenna = true) {
   const r = size / 2;
   ctx.save();
   ctx.translate(cx, cy);
@@ -500,21 +501,23 @@ function drawCuteCharacter(ctx, cx, cy, size, color) {
   ctx.arc(0, r*0.32, r*0.2, 0.25, Math.PI - 0.25);
   ctx.stroke();
   // antenna with golden bulb (centered for symmetry)
-  ctx.strokeStyle = '#0a0a14';
-  ctx.lineWidth = Math.max(2, r*0.06);
-  ctx.beginPath();
-  ctx.moveTo(0, -r + r*0.05);
-  ctx.quadraticCurveTo(-r*0.04, -r*1.18, 0, -r*1.32);
-  ctx.stroke();
-  const bulbGrad = ctx.createRadialGradient(-r*0.04, -r*1.38, r*0.02, 0, -r*1.35, r*0.14);
-  bulbGrad.addColorStop(0, '#fff5b8');
-  bulbGrad.addColorStop(0.5, '#ffd24a');
-  bulbGrad.addColorStop(1, '#c08020');
-  ctx.fillStyle = bulbGrad;
-  ctx.beginPath(); ctx.arc(0, -r*1.42, r*0.14, 0, Math.PI*2); ctx.fill();
-  ctx.strokeStyle = '#0a0a14';
-  ctx.lineWidth = Math.max(1.5, r*0.045);
-  ctx.beginPath(); ctx.arc(0, -r*1.42, r*0.14, 0, Math.PI*2); ctx.stroke();
+  if (withAntenna) {
+    ctx.strokeStyle = '#0a0a14';
+    ctx.lineWidth = Math.max(2, r*0.06);
+    ctx.beginPath();
+    ctx.moveTo(0, -r + r*0.05);
+    ctx.quadraticCurveTo(-r*0.04, -r*1.18, 0, -r*1.32);
+    ctx.stroke();
+    const bulbGrad = ctx.createRadialGradient(-r*0.04, -r*1.38, r*0.02, 0, -r*1.35, r*0.14);
+    bulbGrad.addColorStop(0, '#fff5b8');
+    bulbGrad.addColorStop(0.5, '#ffd24a');
+    bulbGrad.addColorStop(1, '#c08020');
+    ctx.fillStyle = bulbGrad;
+    ctx.beginPath(); ctx.arc(0, -r*1.42, r*0.14, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#0a0a14';
+    ctx.lineWidth = Math.max(1.5, r*0.045);
+    ctx.beginPath(); ctx.arc(0, -r*1.42, r*0.14, 0, Math.PI*2); ctx.stroke();
+  }
   ctx.restore();
 }
 
@@ -543,7 +546,7 @@ function renderPreview() {
   previewCtx.fillStyle = sh;
   previewCtx.fillRect(0, 360, 360, 100);
   // character centered, large
-  drawCuteCharacter(previewCtx, 180, 240, 220, state.color);
+  drawCuteCharacter(previewCtx, 180, 240, 220, state.color, !state.hat);
   if (state.hat) {
     previewCtx.save();
     previewCtx.translate(180, 240);
@@ -589,8 +592,8 @@ function makeHatSwatch(name) {
   cv.width = 64; cv.height = 64;
   const cctx = cv.getContext('2d');
   cctx.imageSmoothingEnabled = true;
-  // mini character with hat preview
-  drawCuteCharacter(cctx, 32, 40, 36, state.color);
+  // mini character with hat preview (no antenna under hat)
+  drawCuteCharacter(cctx, 32, 40, 36, state.color, false);
   const img = getHatImg(name);
   const drawHatPreview = () => {
     cctx.save(); cctx.translate(32, 40);
