@@ -821,9 +821,19 @@ $('btnLeave').addEventListener('click', () => {
 });
 $('btnStart').addEventListener('click', () => socket.emit('startGame'));
 
+let _pendingLobbyRoom = null;
+let _lobbyRaf = 0;
 socket.on('roomUpdate', (room) => {
   if (!state.roomId || room.id !== state.roomId) return;
-  renderLobby(room);
+  // Coalesce rapid updates (e.g. hat resize wheel spam) into one render per frame
+  _pendingLobbyRoom = room;
+  if (!_lobbyRaf) {
+    _lobbyRaf = requestAnimationFrame(() => {
+      _lobbyRaf = 0;
+      const r = _pendingLobbyRoom; _pendingLobbyRoom = null;
+      if (r) renderLobby(r);
+    });
+  }
 });
 
 socket.on('hostDisconnected', () => {
@@ -1303,9 +1313,14 @@ function drawRocket(ctx, x, y, angle) {
 
 // Explosions (visual only, server emits 'explosion')
 const explosions = [];
+let lastExplodeSoundAt = 0;
 socket.on('explosion', ({x, y, r}) => {
   explosions.push({x, y, r, t: Date.now()});
-  AUD.explode();
+  const now = Date.now();
+  if (now - lastExplodeSoundAt > 70) {
+    lastExplodeSoundAt = now;
+    AUD.explode();
+  }
 });
 function drawExplosions() {
   const now = Date.now();
@@ -1569,27 +1584,27 @@ function render() {
     }
   }
 
+  gctx.font='10px "Press Start 2P",monospace';
+  gctx.textAlign='center';
+  const tankPulse = 0.6 + 0.4 * Math.sin(Date.now()/120);
+  const tankAlpha = tankPulse * 0.35;
   for (const p of ss.players) {
     const px = p.x - camX, py = p.y - camY;
     if (px < -40 || py < -40 || px > W+40 || py > H+40) continue;
     if (p.tank) {
-      const pulse = 0.6 + 0.4 * Math.sin(Date.now()/120);
-      gctx.fillStyle = `rgba(255,80,90,${pulse*0.35})`;
-      gctx.beginPath(); gctx.arc(p.x-camX, p.y-camY, 28, 0, Math.PI*2); gctx.fill();
+      gctx.fillStyle = `rgba(255,80,90,${tankAlpha})`;
+      gctx.beginPath(); gctx.arc(px, py, 28, 0, Math.PI*2); gctx.fill();
     }
-    drawRobotTopDown(gctx, p.x-camX, p.y-camY, p.color, p.angle, p.alive, p.id, p.x, p.y, p.hat||'', p.hatCfg);
+    drawRobotTopDown(gctx, px, py, p.color, p.angle, p.alive, p.id, p.x, p.y, p.hat||'', p.hatCfg);
     // life pips — cached offscreen canvas avoids 130+ fillRect per player/frame
     const lives = typeof p.lives==='number' ? p.lives : 0;
-    const maxPips = 5, heartW = 10, gap = 3;
-    const totalW = maxPips*heartW + (maxPips-1)*gap;
-    const pipImg = getPipRow(lives, maxPips);
-    const py2 = Math.floor(p.y-camY+22);
-    gctx.drawImage(pipImg, Math.floor(p.x-camX-totalW/2), py2);
+    const totalW = 5*10 + 4*3;
+    const pipImg = getPipRow(lives, 5);
+    gctx.drawImage(pipImg, Math.floor(px-totalW/2), Math.floor(py+22));
     // name below hearts
-    gctx.fillStyle='#000'; gctx.fillRect(p.x-camX-30, p.y-camY+38, 60, 12);
+    gctx.fillStyle='#000'; gctx.fillRect(px-30, py+38, 60, 12);
     gctx.fillStyle = p.id===socket.id ? '#ffd24a' : '#fff';
-    gctx.font='10px "Press Start 2P",monospace'; gctx.textAlign='center';
-    gctx.fillText(p.name.slice(0,8), p.x-camX, p.y-camY+48);
+    gctx.fillText(p.name.slice(0,8), px, py+48);
   }
 
   // crosshair
