@@ -320,11 +320,46 @@ function getRobotBody(color) {
 const _gunImg = new Image();
 _gunImg.src = 'gun.png';
 
-function drawRobotTopDown(ctx, x, y, color, angle, alive=true) {
+// Per-player roll state: tracks last position to derive movement and rolling angle
+const _rollState = new Map();
+function updateRoll(id, x, y) {
+  let s = _rollState.get(id);
+  const now = Date.now();
+  if (!s) { s = { x, y, lastT: now, vx: 0, vy: 0, roll: 0 }; _rollState.set(id, s); return s; }
+  const dt = Math.max(1, now - s.lastT);
+  // smoothed velocity
+  const vx = (x - s.x) / dt * 16, vy = (y - s.y) / dt * 16;
+  s.vx = s.vx * 0.6 + vx * 0.4;
+  s.vy = s.vy * 0.6 + vy * 0.4;
+  const speed = Math.hypot(s.vx, s.vy);
+  // roll advances by distance moved (per pixel)
+  const dist = Math.hypot(x - s.x, y - s.y);
+  s.roll += dist * 0.05;
+  s.x = x; s.y = y; s.lastT = now; s.speed = speed;
+  return s;
+}
+
+function drawRobotTopDown(ctx, x, y, color, angle, alive=true, id=null) {
   ctx.save();
   ctx.translate(Math.floor(x), Math.floor(y));
   if (!alive) ctx.globalAlpha = 0.35;
-  ctx.drawImage(getRobotBody(color), -_ROBOT_CX, -_ROBOT_CY);
+  // Rolling animation: tilt body in movement direction + bob/squash
+  const rs = id ? updateRoll(id, x, y) : null;
+  if (rs && rs.speed > 0.2 && alive) {
+    const moveAng = Math.atan2(rs.vy, rs.vx);
+    // Tumble side-to-side (perpendicular to movement) like a rolling blob
+    const tilt = Math.sin(rs.roll * Math.PI) * 0.25;
+    const bob = Math.abs(Math.sin(rs.roll * Math.PI * 2)) * 1.6;
+    ctx.save();
+    ctx.rotate(moveAng + Math.PI/2);   // align tilt axis with movement
+    ctx.rotate(tilt);
+    ctx.rotate(-moveAng - Math.PI/2);
+    ctx.translate(0, -bob);
+    ctx.drawImage(getRobotBody(color), -_ROBOT_CX, -_ROBOT_CY);
+    ctx.restore();
+  } else {
+    ctx.drawImage(getRobotBody(color), -_ROBOT_CX, -_ROBOT_CY);
+  }
   // draw weapon on top of character, rotated toward cursor
   if (_gunImg.complete && _gunImg.naturalWidth > 0) {
     ctx.save();
@@ -647,7 +682,7 @@ window.addEventListener('resize', resize);
 resize();
 
 const keys = { w:false,a:false,s:false,d:false };
-let mouseX = 0, mouseY = 0, leftDown = false, rightDown = false;
+let mouseX = 0, mouseY = 0, leftDown = false, rightDown = false, middleDown = false;
 
 window.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
@@ -674,7 +709,7 @@ gameCanvas.addEventListener('mousedown', e => {
   if (e.button === 0) leftDown = true;
   if (e.button === 2) { rightDown = true; e.preventDefault(); }
   if (e.button === 1) {
-    // Middle click: engineer relocates their turret to cursor world position
+    middleDown = true;
     if (state.inGame && state.serverState) {
       const me = state.serverState.players.find(p => p.id === socket.id);
       if (me && me.alive && me.cls === 'engineer') {
@@ -687,6 +722,7 @@ gameCanvas.addEventListener('mousedown', e => {
 window.addEventListener('mouseup', e => {
   if (e.button === 0) leftDown = false;
   if (e.button === 2) rightDown = false;
+  if (e.button === 1) middleDown = false;
 });
 gameCanvas.addEventListener('contextmenu', e => e.preventDefault());
 gameCanvas.addEventListener('auxclick', e => { if (e.button === 1) e.preventDefault(); });
@@ -746,6 +782,12 @@ $('btnLeaveGame').addEventListener('click', () => {
 setInterval(() => {
   if (!state.inGame) return;
   socket.emit('input', { keys, angle: computeAngle(), leftDown, rightDown });
+  if (middleDown && state.serverState) {
+    const me = state.serverState.players.find(p => p.id === socket.id);
+    if (me && me.alive && me.cls === 'engineer') {
+      socket.emit('moveTurret', { x: mouseX + camX, y: mouseY + camY });
+    }
+  }
 }, 20);
 
 // Footstep sounds
@@ -1048,7 +1090,7 @@ function drawSoda(ctx, x, y) {
   ctx.fillStyle = 'rgba(0,0,0,0.35)';
   ctx.beginPath(); ctx.ellipse(x, y+10, 12, 4, 0, 0, Math.PI*2); ctx.fill();
   if (_sodaImg.complete && _sodaImg.naturalWidth > 0) {
-    const sw = 22, sh = 28;
+    const sh = 30, sw = sh * (_sodaImg.naturalWidth / _sodaImg.naturalHeight);
     const bob = Math.sin(Date.now() / 350) * 1.5;
     ctx.drawImage(_sodaImg, x - sw/2, y - sh/2 + bob, sw, sh);
   } else {
@@ -1368,7 +1410,7 @@ function render() {
       gctx.fillStyle = `rgba(255,80,90,${pulse*0.35})`;
       gctx.beginPath(); gctx.arc(p.x-camX, p.y-camY, 28, 0, Math.PI*2); gctx.fill();
     }
-    drawRobotTopDown(gctx, p.x-camX, p.y-camY, p.color, p.angle, p.alive);
+    drawRobotTopDown(gctx, p.x-camX, p.y-camY, p.color, p.angle, p.alive, p.id);
     gctx.fillStyle='#000'; gctx.fillRect(p.x-camX-30, p.y-camY-30, 60, 12);
     gctx.fillStyle = p.id===socket.id ? '#ffd24a' : '#fff';
     gctx.font='10px "Press Start 2P",monospace'; gctx.textAlign='center';
