@@ -223,21 +223,30 @@ const CLASS_INFO = {
 };
 
 // ===== Robot pixel art =====
+// Cute round blob with two big eyes. Legend:
+//   0=empty, 1=outline (dark), 2=body color, 3=highlight (lighter shade),
+//   4=eye white, 5=eye pupil (dark), 6=cheek blush, 7=mouth
 const ROBOT_SPRITE = [
-  "0000000505000000","0000000515000000",
   "0000011111100000","0000122222210000",
-  "0001222222221000","0012233333322100",
-  "0122334444332210","0122334444332210",
-  "0122333333332210","0122222222222210",
-  "0122222222222210","0112222222222110",
-  "0011222222221100","0001122222110000",
-  "0001212222121000","0001212222121000",
-  "0001210000121000","0001210000121000",
-  "0000110000110000","0000110000110000",
+  "0001222333222100","0012223333322210",
+  "0122223333322221","0122444222444221",
+  "1224444222444421","1224554222455421",
+  "1224554222455421","1224444222444421",
+  "0122444222444221","0122226772222210",
+  "0122222777222210","0162222222222610",
+  "0016222222226100","0001622222261000",
+  "0000162222610000","0000016226100000",
+  "0000001661000000","0000000110000000",
 ];
 
 function drawRobot(ctx, ox, oy, scale, color) {
   const cell = scale, w = 16, h = 20;
+  // derive a lighter highlight tint from the body color
+  const n = parseInt((color||'#ff5577').slice(1), 16);
+  const r = Math.min(255, ((n>>16)&255) + 40);
+  const g = Math.min(255, ((n>>8)&255) + 40);
+  const b = Math.min(255, (n&255) + 40);
+  const light = '#' + ((r<<16)|(g<<8)|b).toString(16).padStart(6,'0');
   ctx.save();
   ctx.translate(ox + (w*cell)/2, oy + (h*cell)/2);
   ctx.imageSmoothingEnabled = false;
@@ -248,9 +257,11 @@ function drawRobot(ctx, ox, oy, scale, color) {
       let fill;
       if (c==='1') fill='#0a0a0a';
       else if (c==='2') fill=color;
-      else if (c==='3') fill='#1a1a2a';
-      else if (c==='4') fill='#7afcff';
-      else if (c==='5') fill='#ff3050';
+      else if (c==='3') fill=light;
+      else if (c==='4') fill='#ffffff';
+      else if (c==='5') fill='#0a0a14';
+      else if (c==='6') fill='#ff8aa0';
+      else if (c==='7') fill='#2a1010';
       ctx.fillStyle = fill;
       ctx.fillRect(-((w*cell)/2)+x*cell, -((h*cell)/2)+y*cell, cell, cell);
     }
@@ -263,21 +274,49 @@ function drawRobot(ctx, ox, oy, scale, color) {
 // of 15+ fillRect calls + ctx.ellipse per player per frame.
 const _robotBodyCache = new Map();
 const _ROBOT_CX = 22, _ROBOT_CY = 20, _ROBOT_CW = 50, _ROBOT_CH = 40;
+// Helper: draw a filled pixel disc (no anti-aliasing)
+function _drawPixelDisc(ctx, cx, cy, r, fill) {
+  ctx.fillStyle = fill;
+  for (let y = -r; y <= r; y++) {
+    for (let x = -r; x <= r; x++) {
+      if (x*x + y*y <= r*r) ctx.fillRect(cx + x, cy + y, 1, 1);
+    }
+  }
+}
 function getRobotBody(color) {
   if (_robotBodyCache.has(color)) return _robotBodyCache.get(color);
   const cv = document.createElement('canvas');
   cv.width = _ROBOT_CW; cv.height = _ROBOT_CH;
   const c = cv.getContext('2d');
   c.imageSmoothingEnabled = false;
-  const r = 14, cx = _ROBOT_CX, cy = _ROBOT_CY;
-  c.fillStyle = '#0a0a0a'; c.fillRect(cx-r, cy-r+2, r*2, r*2-4);
-  c.fillStyle = color;     c.fillRect(cx-r+2, cy-r+4, r*2-4, r*2-8);
-  c.fillStyle = '#1a1a2a'; c.fillRect(cx, cy-r/2, r-2, r);
-  c.fillStyle = '#7afcff'; c.fillRect(cx+r-8, cy-3, 2, 2); c.fillRect(cx+r-8, cy+1, 2, 2);
-  c.fillStyle = '#ff3050'; c.fillRect(cx-r-2, cy-1, 3, 3);
-  c.fillStyle = '#222';    c.fillRect(cx+r-2, cy-2, 14, 4);
-  c.fillStyle = '#555';    c.fillRect(cx+r-2, cy-3, 4, 6);
-  c.fillStyle = '#ffd24a'; c.fillRect(cx+r+8, cy-1, 4, 2);
+  const cx = _ROBOT_CX, cy = _ROBOT_CY;
+  // lighter shade for highlight
+  const n = parseInt((color||'#ff5577').slice(1), 16);
+  const lr = Math.min(255, ((n>>16)&255) + 50);
+  const lg = Math.min(255, ((n>>8)&255) + 50);
+  const lb = Math.min(255, (n&255) + 50);
+  const light = '#' + ((lr<<16)|(lg<<8)|lb).toString(16).padStart(6,'0');
+  // outline + body (round blob)
+  _drawPixelDisc(c, cx, cy, 14, '#0a0a0a');
+  _drawPixelDisc(c, cx, cy, 12, color);
+  // soft top-left highlight
+  _drawPixelDisc(c, cx-3, cy-4, 5, light);
+  // two big eyes — facing the "front" (positive X = angle 0)
+  // whites
+  _drawPixelDisc(c, cx+3, cy-5, 4, '#0a0a0a');
+  _drawPixelDisc(c, cx+3, cy+5, 4, '#0a0a0a');
+  _drawPixelDisc(c, cx+3, cy-5, 3, '#ffffff');
+  _drawPixelDisc(c, cx+3, cy+5, 3, '#ffffff');
+  // pupils (slightly forward = looking ahead)
+  _drawPixelDisc(c, cx+5, cy-5, 2, '#0a0a14');
+  _drawPixelDisc(c, cx+5, cy+5, 2, '#0a0a14');
+  // tiny eye glints
+  c.fillStyle = '#ffffff';
+  c.fillRect(cx+6, cy-6, 1, 1);
+  c.fillRect(cx+6, cy+4, 1, 1);
+  // pink cheek blush at the rear corners
+  _drawPixelDisc(c, cx-6, cy-7, 2, '#ff8aa0');
+  _drawPixelDisc(c, cx-6, cy+7, 2, '#ff8aa0');
   _robotBodyCache.set(color, cv);
   return cv;
 }
