@@ -1260,19 +1260,26 @@ async function sbGetMap(name) {
   return rows[0] ? rows[0].walls : null;
 }
 async function sbSaveMap(name, walls) {
-  const r = await fetch(`${SB.url}/rest/v1/maps`, {
+  const r = await fetch(`${SB.url}/rest/v1/rpc/save_map`, {
     method: 'POST',
-    headers: {...SB_HEADERS, 'Prefer': 'resolution=merge-duplicates,return=minimal'},
-    body: JSON.stringify({ name, walls }),
+    headers: SB_HEADERS,
+    body: JSON.stringify({
+      p_name: name, p_walls: walls,
+      p_password: window.MAP_EDITOR_PASSWORD || '',
+    }),
   });
   if (!r.ok) throw new Error('save ' + r.status + ' ' + (await r.text()));
 }
 async function sbDeleteMap(name) {
-  const r = await fetch(`${SB.url}/rest/v1/maps?name=eq.${encodeURIComponent(name)}`, {
-    method: 'DELETE',
+  const r = await fetch(`${SB.url}/rest/v1/rpc/delete_map`, {
+    method: 'POST',
     headers: SB_HEADERS,
+    body: JSON.stringify({
+      p_name: name,
+      p_password: window.MAP_EDITOR_PASSWORD || '',
+    }),
   });
-  if (!r.ok) throw new Error('delete ' + r.status);
+  if (!r.ok) throw new Error('delete ' + r.status + ' ' + (await r.text()));
 }
 
 let serverMaps = ['default'];
