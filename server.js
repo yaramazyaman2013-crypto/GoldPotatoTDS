@@ -78,10 +78,11 @@ const C = {
   PYRO_FUEL_MAX: 50,             // max fuel shots
   PYRO_REFUEL_MS: 2000,          // refuel time when empty
   // Sniper class
-  SNIPER_DMG: 10,
-  SNIPER_BULLET_SPEED: 36,
-  SNIPER_BULLET_LIFE: 90,        // ~90 ticks * 36 = 3240px (whole map)
-  SNIPER_RELOAD_MS: 10000,
+  SNIPER_DMG: 15,
+  SNIPER_BULLET_SPEED: 28,
+  SNIPER_BULLET_HIT_R: 7,        // larger hitbox to prevent tunneling at high speed
+  SNIPER_BULLET_LIFE: 115,       // ~115 * 28 = 3220px (whole map)
+  SNIPER_RELOAD_MS: 6000,
   SNIPER_FIRE_CD: 200,
   KNIFE_RANGE: 55,
   KNIFE_ARC: Math.PI * 0.55,     // ~99° front cone
@@ -747,7 +748,7 @@ function tick(room) {
     const b = room.bullets[i];
     b.x += b.vx; b.y += b.vy; b.life--;
     const isRocket = b.type === 'rocket';
-    const r = isRocket ? C.ROCKET_R : C.BULLET_R;
+    const r = isRocket ? C.ROCKET_R : (b.type === 'sniper' ? C.SNIPER_BULLET_HIT_R : C.BULLET_R);
     let detonated = false;
 
     if (b.life<=0||b.x<0||b.y<0||b.x>C.MAP_W||b.y>C.MAP_H) {
