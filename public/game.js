@@ -290,10 +290,22 @@ function getRobotBody(color) {
   return cv;
 }
 
+const _gunImg = new Image();
+_gunImg.src = 'gun.png';
+
 function drawRobotTopDown(ctx, x, y, color, angle, alive=true) {
   ctx.save();
   ctx.translate(Math.floor(x), Math.floor(y));
   if (!alive) ctx.globalAlpha = 0.35;
+  // draw weapon behind character, rotated toward cursor
+  if (_gunImg.complete && _gunImg.naturalWidth > 0) {
+    ctx.save();
+    ctx.translate(0, 8);  // slightly below center
+    ctx.rotate(angle);
+    const gw = 32, gh = 16;
+    ctx.drawImage(_gunImg, 2, -gh / 2, gw, gh);
+    ctx.restore();
+  }
   ctx.drawImage(getRobotBody(color), -_ROBOT_CX, -_ROBOT_CY);
   ctx.restore();
 }
