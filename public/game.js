@@ -1129,21 +1129,20 @@ function renderHUD() {
   // class ability cooldown
   const ab = $('abilityBtn');
   if (ab && me) {
-    const now = Date.now();
     let label = '', ready = false, action = null;
     if (me.cls === 'engineer') {
-      const rem = Math.max(0, (me.turretReadyAt||0) - now);
+      const rem = me.turretReadyIn || 0;
       ready = rem === 0; action = 'placeTurret';
       label = ready ? 'TARET KOY (B)' : 'TARET ' + Math.ceil(rem/1000) + 's';
     } else if (me.cls === 'medic') {
-      const rem = Math.max(0, (me.petReadyAt||0) - now);
+      const rem = me.petReadyIn || 0;
       ready = rem === 0; action = 'placePet';
       label = ready ? 'PET KOY (V)' : 'PET ' + Math.ceil(rem/1000) + 's';
     } else if (me.cls === 'cyber') {
-      const rem = Math.max(0, 30000 - (now - (state.cyberAnchor||now)));
+      const rem = me.cyberReadyIn || 0;
       label = 'FUZE ' + Math.ceil(rem/1000) + 's';
     } else if (me.cls === 'tank') {
-      label = me.tank ? 'TANK ' + Math.ceil((me.tankUntil-now)/1000) + 's' : 'KILLS ' + (me.tankKills||0) + '/3';
+      label = me.tank ? 'TANK ' + Math.ceil((me.tankRemaining||0)/1000) + 's' : 'KILLS ' + (me.tankKills||0) + '/3';
     }
     if (label) {
       ab.textContent = label;
