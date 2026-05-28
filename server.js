@@ -67,7 +67,7 @@ const C = {
   MEDIC_HEART_CD:        150 * 1000,
   TANK_KILLS_REQUIRED:   3,
   TANK_DURATION:         30 * 1000,
-  TANK_HP_BOOST:         20,
+  TANK_HP_BOOST:         25,
   // Soda pickup (rare, +3 HP)
   SODA_SPAWN_MS:   90 * 1000,
   MAX_SODAS:       1,
@@ -533,7 +533,7 @@ function tick(room) {
     // Tank mode expiry
     const isTank = now < p.tankUntil;
     const speedMul = isTank ? 0.7 : 1;
-    const playerR = isTank ? C.PLAYER_R + 6 : C.PLAYER_R;
+    const playerR = isTank ? C.PLAYER_R + 12 : C.PLAYER_R;
 
     let dx = 0, dy = 0;
     if (p.keys.w) dy -= 1; if (p.keys.s) dy += 1;
@@ -725,7 +725,7 @@ function tick(room) {
       // hit players
       for (const p of room.players.values()) {
         if (!p.alive || p.id===b.owner) continue;
-        const pr = (Date.now() < p.tankUntil ? C.PLAYER_R + 6 : C.PLAYER_R);
+        const pr = (Date.now() < p.tankUntil ? C.PLAYER_R + 12 : C.PLAYER_R);
         if ((p.x-b.x)**2+(p.y-b.y)**2 < (pr + r)**2) {
           if (isRocket) { detonated = true; }
           else {
