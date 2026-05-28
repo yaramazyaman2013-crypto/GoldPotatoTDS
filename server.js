@@ -54,7 +54,7 @@ const C = {
   TANK_KILLS_REQUIRED:   5,
   TANK_DURATION:         20 * 1000,
   // Turret
-  TURRET_HP: 45,
+  TURRET_HP: 20,
   TURRET_MOVE_SPEED: 3.2, // px per tick (~128 px/sec at 40Hz) — visibly walking
   TURRET_RANGE: 280,
   TURRET_FIRE_CD: 600,
@@ -237,12 +237,19 @@ function breakWall(room, wall) {
   io.to(room.code).emit('wallBroken', { id: wall.id });
 }
 function randomSpawnIn(walls) {
-  for (let i = 0; i < 200; i++) {
+  for (let i = 0; i < 500; i++) {
     const x = 60 + Math.random() * (C.MAP_W - 120);
     const y = 60 + Math.random() * (C.MAP_H - 120);
     if (!hitsWallList(walls, x, y, C.PLAYER_R + 4)) return {x, y};
   }
-  return {x: 80, y: 80};
+  // Grid scan fallback: walk across the map in a grid to find any free cell
+  const step = 80;
+  for (let gy = step; gy < C.MAP_H - step; gy += step) {
+    for (let gx = step; gx < C.MAP_W - step; gx += step) {
+      if (!hitsWallList(walls, gx, gy, C.PLAYER_R + 4)) return {x: gx, y: gy};
+    }
+  }
+  return {x: 800, y: 600};
 }
 
 // ============================================================
@@ -415,8 +422,10 @@ function tryMove(p, dx, dy, r) {
   let nx = p.x+dx, ny = p.y+dy;
   nx = Math.max(rr, Math.min(C.MAP_W-rr, nx));
   ny = Math.max(rr, Math.min(C.MAP_H-rr, ny));
-  if (!hitsWallList(walls, nx, p.y, rr)) p.x = nx;
-  if (!hitsWallList(walls, p.x, ny, rr)) p.y = ny;
+  // If already inside a wall (bad spawn), always allow movement so player can escape
+  const stuck = hitsWallList(walls, p.x, p.y, rr);
+  if (stuck || !hitsWallList(walls, nx, p.y, rr)) p.x = nx;
+  if (stuck || !hitsWallList(walls, p.x, ny, rr)) p.y = ny;
 }
 
 function tick(room) {
@@ -515,7 +524,10 @@ function tick(room) {
   // Turrets: walk toward target point if relocating, then target/fire.
   for (let ti = room.turrets.length-1; ti >= 0; ti--) {
     const t = room.turrets[ti];
-    if (t.hp <= 0) { room.turrets.splice(ti, 1); continue; }
+    if (t.hp <= 0) {
+      io.to(room.code).emit('explosion', {x: t.x, y: t.y, r: 32});
+      room.turrets.splice(ti, 1); continue;
+    }
     if (t.targetX !== undefined) {
       const dx = t.targetX - t.x, dy = t.targetY - t.y;
       const dist = Math.hypot(dx, dy);
@@ -765,12 +777,12 @@ io.on('connection', (socket) => {
     if (typeof x !== 'number' || typeof y !== 'number') return;
     const tx = Math.max(20, Math.min(C.MAP_W - 20, x));
     const ty = Math.max(20, Math.min(C.MAP_H - 20, y));
-    const mine = room.turrets.find(t => t.owner === p.id);
-    if (!mine) return;
+    const mine = room.turrets.filter(t => t.owner === p.id);
+    if (!mine.length) return;
     const dx = p.x - tx, dy = p.y - ty;
     if (dx*dx + dy*dy > 260*260) return;
     if (hitsWallList(room.walls, tx, ty, 14)) return;
-    mine.targetX = tx; mine.targetY = ty;
+    for (const t of mine) { t.targetX = tx; t.targetY = ty; }
   });
 
   socket.on('placePet', () => {
