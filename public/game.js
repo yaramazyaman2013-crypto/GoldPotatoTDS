@@ -1400,7 +1400,15 @@ function drawExplosions() {
   }
 }
 
+const _heartImg = new Image();
+_heartImg.src = 'heart.png';
 function drawHeart(ctx, x, y) {
+  if (_heartImg.complete && _heartImg.naturalWidth > 0) {
+    const bob = Math.sin(Date.now() / 350) * 1.2;
+    ctx.drawImage(_heartImg, x - 14, y - 14 + bob, 28, 28);
+    return;
+  }
+  // Fallback pixel heart
   const map = ["0110110","1111111","1111111","0111110","0011100","0001000"];
   const s = 3;
   ctx.fillStyle = '#000';
@@ -1506,27 +1514,40 @@ function patchGroundCache(wx, wy, ww, wh) {
 // Pre-render the life-pip row (most expensive player draw) onto a tiny
 // offscreen canvas once per player-lives value so the render loop just
 // calls drawImage instead of 130+ fillRect calls per player per frame.
-const pipCache = new Map(); // key = `${lives}/${maxPips}` → ImageBitmap or canvas
+const pipCache = new Map(); // key = `${lives}/${maxPips}` → canvas
 const heartShape = ["01010","11111","11111","01110","00100"];
+// Re-render pips when heart image finishes loading (no-op if already loaded)
+if (!_heartImg.complete) _heartImg.addEventListener('load', () => pipCache.clear(), { once: true });
 function getPipRow(lives, maxPips) {
   const key = `${lives}|${maxPips}`;
   if (pipCache.has(key)) return pipCache.get(key);
-  const cell = 2, heartW = 5*cell, heartH = 5*cell, gap = 3;
+  const heartW = 10, heartH = 10, gap = 3;
   const totalW = maxPips*heartW + (maxPips-1)*gap;
   const cv = document.createElement('canvas');
   cv.width = totalW; cv.height = heartH;
   const c = cv.getContext('2d');
-  c.imageSmoothingEnabled = false;
-  for (let i = 0; i < maxPips; i++) {
-    const hx = i*(heartW+gap), filled = i < lives;
-    for (let yy = 0; yy < 5; yy++) for (let xx = 0; xx < 5; xx++) {
-      if (heartShape[yy][xx] !== '1') continue;
-      c.fillStyle = '#000'; c.fillRect(hx+xx*cell-1, yy*cell-1, cell+2, cell+2);
+  c.imageSmoothingEnabled = true;
+  if (_heartImg.complete && _heartImg.naturalWidth > 0) {
+    for (let i = 0; i < maxPips; i++) {
+      const hx = i*(heartW+gap), filled = i < lives;
+      c.globalAlpha = filled ? 1 : 0.25;
+      c.drawImage(_heartImg, hx, 0, heartW, heartH);
     }
-    for (let yy = 0; yy < 5; yy++) for (let xx = 0; xx < 5; xx++) {
-      if (heartShape[yy][xx] !== '1') continue;
-      c.fillStyle = filled ? (yy < 2 ? '#ff6080' : '#ff3050') : '#3a1018';
-      c.fillRect(hx+xx*cell, yy*cell, cell, cell);
+    c.globalAlpha = 1;
+  } else {
+    // Pixel fallback
+    const cell = 2;
+    for (let i = 0; i < maxPips; i++) {
+      const hx = i*(heartW+gap), filled = i < lives;
+      for (let yy = 0; yy < 5; yy++) for (let xx = 0; xx < 5; xx++) {
+        if (heartShape[yy][xx] !== '1') continue;
+        c.fillStyle = '#000'; c.fillRect(hx+xx*cell-1, yy*cell-1, cell+2, cell+2);
+      }
+      for (let yy = 0; yy < 5; yy++) for (let xx = 0; xx < 5; xx++) {
+        if (heartShape[yy][xx] !== '1') continue;
+        c.fillStyle = filled ? (yy < 2 ? '#ff6080' : '#ff3050') : '#3a1018';
+        c.fillRect(hx+xx*cell, yy*cell, cell, cell);
+      }
     }
   }
   pipCache.set(key, cv);
