@@ -774,12 +774,12 @@ io.on('connection', (socket) => {
     if (typeof x !== 'number' || typeof y !== 'number') return;
     const tx = Math.max(20, Math.min(C.MAP_W - 20, x));
     const ty = Math.max(20, Math.min(C.MAP_H - 20, y));
-    const mine = room.turrets.find(t => t.owner === p.id);
-    if (!mine) return;
+    const mine = room.turrets.filter(t => t.owner === p.id);
+    if (!mine.length) return;
     const dx = p.x - tx, dy = p.y - ty;
     if (dx*dx + dy*dy > 260*260) return;
     if (hitsWallList(room.walls, tx, ty, 14)) return;
-    mine.targetX = tx; mine.targetY = ty;
+    for (const t of mine) { t.targetX = tx; t.targetY = ty; }
   });
 
   socket.on('placePet', () => {
