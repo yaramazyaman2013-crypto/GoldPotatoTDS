@@ -336,13 +336,17 @@ function getHatImg(name) {
 
 // Per-hat user adjustments persisted in localStorage as {ox, oy, scale}.
 // ox/oy are character-radius-relative offsets, scale multiplies base size.
+const HAT_DEFAULTS = {
+  'şapka2.png': { ox: 0.18, oy: -0.35, scale: 1.0 },
+};
 function getHatCfg(name) {
-  if (!name) return { ox: 0.18, oy: -0.35, scale: 1.5 };
+  const def = (name && HAT_DEFAULTS[name]) || { ox: 0.18, oy: -0.35, scale: 1.5 };
+  if (!name) return def;
   try {
     const raw = localStorage.getItem('gwHatCfg_' + name);
-    if (raw) return { ox: 0.18, oy: -0.35, scale: 1.5, ...JSON.parse(raw) };
+    if (raw) return { ...def, ...JSON.parse(raw) };
   } catch (e) {}
-  return { ox: 0.18, oy: -0.35, scale: 1.5 };
+  return def;
 }
 function setHatCfg(name, cfg) {
   if (!name) return;
