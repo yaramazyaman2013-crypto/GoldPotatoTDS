@@ -319,7 +319,7 @@ canvas { image-rendering: pixelated; display: block; }
 .map-del:hover { background: #ff8090; }
 
 /* MAP EDITOR */
-.editor-panel { min-width: 720px; }
+.editor-panel { min-width: 1000px; }
 #editorCanvas {
   background: #2a3a2a; border: 3px solid #ffd24a;
   cursor: crosshair; image-rendering: pixelated;

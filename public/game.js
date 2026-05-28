@@ -1418,20 +1418,24 @@ function newGrid() {
 // Merge consecutive cells of the same kind only.
 function gridToWalls(grid) {
   const W = EDITOR.gridW, H = EDITOR.gridH, CS = EDITOR.cellSize;
+  // Breakable kinds (mesh) keep one rect per cell so destroying one cell
+  // doesn't take out the whole row. Solid kinds get merged for perf.
+  const NO_MERGE = new Set(['mesh']);
   const used = grid.map(row => row.map(() => false));
   const out = [];
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const kind = grid[y][x];
       if (!kind || used[y][x]) continue;
-      let w = 1;
-      while (x + w < W && grid[y][x+w] === kind && !used[y][x+w]) w++;
-      let h = 1;
-      outer: while (y + h < H) {
-        for (let xx = 0; xx < w; xx++) {
-          if (grid[y+h][x+xx] !== kind || used[y+h][x+xx]) break outer;
+      let w = 1, h = 1;
+      if (!NO_MERGE.has(kind)) {
+        while (x + w < W && grid[y][x+w] === kind && !used[y][x+w]) w++;
+        outer: while (y + h < H) {
+          for (let xx = 0; xx < w; xx++) {
+            if (grid[y+h][x+xx] !== kind || used[y+h][x+xx]) break outer;
+          }
+          h++;
         }
-        h++;
       }
       for (let yy = 0; yy < h; yy++)
         for (let xx = 0; xx < w; xx++) used[y+yy][x+xx] = true;
@@ -1484,7 +1488,7 @@ function drawEditor() {
   const cv = $('editorCanvas');
   if (!cv) return;
   const ctx = cv.getContext('2d');
-  const cs = 16; // px per cell on screen
+  const cs = 24; // px per cell on screen — bigger editor (was 16)
   cv.width = EDITOR.gridW * cs;
   cv.height = EDITOR.gridH * cs;
   ctx.imageSmoothingEnabled = false;
@@ -1541,10 +1545,8 @@ function renderGroundPicker() {
   let dragMode = null;
   function cellAt(e) {
     const r = cv.getBoundingClientRect();
-    // Use canvas internal pixel size so CSS scaling can't break clicks
-    const sx = cv.width / r.width, sy = cv.height / r.height;
-    const x = Math.floor(((e.clientX - r.left) * sx) / 16);
-    const y = Math.floor(((e.clientY - r.top)  * sy) / 16);
+    const x = Math.floor((e.clientX - r.left) / (r.width  / EDITOR.gridW));
+    const y = Math.floor((e.clientY - r.top)  / (r.height / EDITOR.gridH));
     if (x<0||y<0||x>=EDITOR.gridW||y>=EDITOR.gridH) return null;
     return {x, y};
   }
