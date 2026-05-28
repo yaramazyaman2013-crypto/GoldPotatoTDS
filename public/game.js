@@ -627,10 +627,7 @@ socket.on('roundStart', (data) => {
 
 socket.on('wallBroken', ({id}) => {
   const i = state.walls.findIndex(w => w.id === id);
-  if (i >= 0) {
-    state.walls.splice(i, 1);
-    rebuildGroundCache();
-  }
+  if (i >= 0) state.walls.splice(i, 1);
 });
 
 // ===== Client-side interpolation buffer =====
@@ -999,10 +996,6 @@ function rebuildGroundCache() {
       }
     }
   }
-  // walls
-  for (const w of state.walls) {
-    drawWall(c, w.x, w.y, w.w, w.h, w.kind || 'stone');
-  }
   groundCache = cv;
 }
 
@@ -1072,6 +1065,15 @@ function render() {
     const dstX = srcX - icx, dstY = srcY - icy;
     if (srcW > 0 && srcH > 0) {
       gctx.drawImage(groundCache, srcX, srcY, srcW, srcH, dstX, dstY, srcW, srcH);
+    }
+  }
+  // Draw walls inline so broken mesh cells disappear immediately without
+  // needing to rebuild the 1600x1200 ground cache (which caused frame freezes).
+  if (state.walls) {
+    for (const w of state.walls) {
+      const wx = w.x - camX, wy = w.y - camY;
+      if (wx + w.w < 0 || wy + w.h < 0 || wx > W || wy > H) continue;
+      drawWall(gctx, wx, wy, w.w, w.h, w.kind || 'stone');
     }
   }
 
@@ -1421,6 +1423,7 @@ function gridToWalls(grid) {
   // Breakable kinds (mesh) keep one rect per cell so destroying one cell
   // doesn't take out the whole row. Solid kinds get merged for perf.
   const NO_MERGE = new Set(['mesh']);
+  const MAX_HEIGHT = { tree: 2 };
   const used = grid.map(row => row.map(() => false));
   const out = [];
   for (let y = 0; y < H; y++) {
@@ -1430,7 +1433,8 @@ function gridToWalls(grid) {
       let w = 1, h = 1;
       if (!NO_MERGE.has(kind)) {
         while (x + w < W && grid[y][x+w] === kind && !used[y][x+w]) w++;
-        outer: while (y + h < H) {
+        const maxH = MAX_HEIGHT[kind] || Infinity;
+        outer: while (y + h < H && h < maxH) {
           for (let xx = 0; xx < w; xx++) {
             if (grid[y+h][x+xx] !== kind || used[y+h][x+xx]) break outer;
           }
