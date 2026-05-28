@@ -334,19 +334,20 @@ function getHatImg(name) {
   return img;
 }
 
-// Per-hat user adjustments persisted in localStorage as {ox, oy, scale}.
-// ox/oy are character-radius-relative offsets, scale multiplies base size.
+// Per-hat user adjustments persisted in localStorage as {ox, oy, scale, rot}.
+// ox/oy are character-radius-relative offsets, scale multiplies base size, rot in radians.
+const HAT_DEFAULT = { ox: 0.18, oy: -0.35, scale: 1.5, rot: 0 };
 const HAT_DEFAULTS = {
-  'şapka2.png': { ox: 0.18, oy: -0.35, scale: 0.85 },
+  'şapka2.png': { ox: 0.18, oy: -0.35, scale: 0.95, rot: 0 },
 };
 function getHatCfg(name) {
-  const def = (name && HAT_DEFAULTS[name]) || { ox: 0.18, oy: -0.35, scale: 1.5 };
-  if (!name) return def;
+  const def = (name && HAT_DEFAULTS[name]) || HAT_DEFAULT;
+  if (!name) return { ...def };
   try {
     const raw = localStorage.getItem('gwHatCfg_' + name);
     if (raw) return { ...def, ...JSON.parse(raw) };
   } catch (e) {}
-  return def;
+  return { ...def };
 }
 function setHatCfg(name, cfg) {
   if (!name) return;
@@ -364,9 +365,18 @@ function drawHat(ctx, name, size, cfgOverride) {
   const cfg = cfgOverride || getHatCfg(name);
   const hatW = Math.round(r * cfg.scale);
   const hatH = Math.round(hatW / aspect);
-  const x = Math.round(-hatW / 2 + r * cfg.ox);
-  const y = Math.round(r * cfg.oy - hatH);
-  ctx.drawImage(img, x, y, hatW, hatH);
+  const cx = r * cfg.ox;
+  const cy = r * cfg.oy - hatH / 2;
+  const rot = cfg.rot || 0;
+  if (rot) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(rot);
+    ctx.drawImage(img, -hatW / 2, -hatH / 2, hatW, hatH);
+    ctx.restore();
+  } else {
+    ctx.drawImage(img, Math.round(cx - hatW / 2), Math.round(cy - hatH / 2), hatW, hatH);
+  }
 }
 
 // Per-player roll state: tracks world position for smooth velocity
@@ -575,7 +585,7 @@ function renderPreview() {
     previewCtx.fillStyle = 'rgba(255,210,74,0.8)';
     previewCtx.font = '10px "Press Start 2P", monospace';
     previewCtx.textAlign = 'center';
-    previewCtx.fillText('SAPKAYI SURUKLE', 180, 450);
+    previewCtx.fillText('SURUKLE • TEKERLEK = DONDUR', 180, 450);
   }
 }
 renderPreview();
@@ -619,6 +629,16 @@ drawShirt($('shirtIcon').getContext('2d'));
       socket.emit('setHat', { hat: state.hat, cfg: c });
     }
   });
+  previewCanvas.addEventListener('wheel', e => {
+    if (!state.hat) return;
+    e.preventDefault();
+    const cfg = getHatCfg(state.hat);
+    const dir = e.deltaY > 0 ? 1 : -1;
+    cfg.rot = ((cfg.rot || 0) + dir * 0.1) % (Math.PI * 2);
+    setHatCfg(state.hat, cfg);
+    renderPreview();
+    if (state.roomId) socket.emit('setHat', { hat: state.hat, cfg });
+  }, { passive: false });
 })();
 
 const palette = $('colorPalette');
@@ -682,7 +702,7 @@ function loadHats() {
   addCloseBtn(hatPalette);
   const hint = document.createElement('div');
   hint.className = 'hat-hint';
-  hint.textContent = 'SAPKAYI KARAKTERE SURUKLEYEREK KONUMLANDIR';
+  hint.textContent = 'SURUKLE = KONUMLA • TEKERLEK = DONDUR';
   hatPalette.appendChild(hint);
   const none = document.createElement('div');
   none.className = 'none-opt';

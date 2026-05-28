@@ -993,6 +993,7 @@ io.on('connection', (socket) => {
         ox: clamp(cfg.ox, -1.1, 1.1),
         oy: clamp(cfg.oy, -2.0, 0.6),
         scale: clamp(cfg.scale, 0.3, 4),
+        rot: clamp(cfg.rot, -Math.PI * 2, Math.PI * 2),
       };
       onlyCfg = p.hat === safe && !!p.hatCfg;
       p.hatCfg = nextCfg;
