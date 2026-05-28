@@ -244,10 +244,11 @@ const state = {
 };
 
 const CLASS_INFO = {
-  cyber:    { label: 'CYBER',    desc: '1 füze ile başlar<br>Her 50sn: +2 füze',           color: '#7afcff' },
-  engineer: { label: 'MUHENDIS', desc: '70sn: Taret koy (B)<br>25 mermi, 3sn reload',     color: '#4a8aff' },
+  cyber:    { label: 'CYBER',    desc: '1 füze ile başlar<br>Her 50sn: +3 füze (mavi)',    color: '#7afcff' },
+  engineer: { label: 'MUHENDIS', desc: '70sn: Taret koy (B)<br>25 mermi, 4.5sn reload',   color: '#4a8aff' },
   medic:    { label: 'DOKTOR',   desc: '65sn: Heal pet (V)<br>2.5dk: +1 can',             color: '#7ad24a' },
   tank:     { label: 'TANK',     desc: '3 kill: 30sn tank modu<br>25 HP, büyük, x2 hasar',color: '#ff5577' },
+  pyro:     { label: 'PYRO',     desc: 'Alev silahı<br>Yakın mesafe, sürekli hasar',       color: '#ff7a1a' },
 };
 
 // ===== Robot pixel art =====
@@ -321,6 +322,8 @@ function getRobotBody(color, withAntenna = true) {
 
 const _gunImg = new Image();
 _gunImg.src = 'gun.png';
+const _flameImg = new Image();
+_flameImg.src = 'flame.png';
 
 // Hat image cache (key: filename, value: Image)
 const _hatImgCache = new Map();
@@ -394,7 +397,7 @@ function updateRoll(id, wx, wy) {
   return s;
 }
 
-function drawRobotTopDown(ctx, x, y, color, angle, alive=true, id=null, wx=0, wy=0, hat='', hatCfg=null) {
+function drawRobotTopDown(ctx, x, y, color, angle, alive=true, id=null, wx=0, wy=0, hat='', hatCfg=null, cls='') {
   ctx.save();
   ctx.translate(x, y);
   if (!alive) ctx.globalAlpha = 0.35;
@@ -402,10 +405,8 @@ function drawRobotTopDown(ctx, x, y, color, angle, alive=true, id=null, wx=0, wy
   const rs = id ? updateRoll(id, wx, wy) : null;
   if (rs && rs.speed > 0.5 && alive) {
     const now = Date.now();
-    // Lean forward in movement direction
     const moveAng = Math.atan2(rs.vy, rs.vx);
-    const lean = 0.12;  // gentle lean forward
-    // Side-to-side wobble perpendicular to movement
+    const lean = 0.12;
     const wobble = Math.sin(now / 100) * 0.08;
     const bob = Math.abs(Math.sin(now / 100)) * 1.5;
     ctx.rotate(moveAng);
@@ -415,13 +416,19 @@ function drawRobotTopDown(ctx, x, y, color, angle, alive=true, id=null, wx=0, wy
   }
   ctx.drawImage(getRobotBody(color, !hat), -_ROBOT_CX, -_ROBOT_CY);
   if (hat) drawHat(ctx, hat, 36, hatCfg);
-  // draw weapon on top of character, rotated toward cursor
-  if (_gunImg.complete && _gunImg.naturalWidth > 0) {
+  // draw weapon rotated toward cursor
+  const weaponImg = cls === 'pyro' ? _flameImg : _gunImg;
+  if (weaponImg.complete && weaponImg.naturalWidth > 0) {
     ctx.save();
     ctx.translate(0, 8);
     ctx.rotate(angle);
-    const gw = 32, gh = 16;
-    ctx.drawImage(_gunImg, 2, -gh / 2, gw, gh);
+    if (cls === 'pyro') {
+      const gw = 36, gh = 20;
+      ctx.drawImage(weaponImg, 2, -gh / 2, gw, gh);
+    } else {
+      const gw = 32, gh = 16;
+      ctx.drawImage(weaponImg, 2, -gh / 2, gw, gh);
+    }
     ctx.restore();
   }
   ctx.restore();
@@ -1160,10 +1167,17 @@ function renderHUD() {
   $('dead').classList.toggle('hidden', !me || me.alive);
   // ammo (bullets) — rockets shown separately (right click)
   if (me) {
-    $('ammoCur').textContent = me.reloading ? '...' : me.ammo;
-    const maxEl = $('ammo').querySelector('.max');
-    if (maxEl) maxEl.textContent = '/' + (me.maxAmmo || 30);
-    $('ammo').classList.toggle('reloading', !!me.reloading);
+    if (me.cls === 'pyro') {
+      $('ammoCur').textContent = '🔥';
+      const maxEl = $('ammo').querySelector('.max');
+      if (maxEl) maxEl.textContent = '';
+      $('ammo').classList.remove('reloading');
+    } else {
+      $('ammoCur').textContent = me.reloading ? '...' : me.ammo;
+      const maxEl = $('ammo').querySelector('.max');
+      if (maxEl) maxEl.textContent = '/' + (me.maxAmmo || 30);
+      $('ammo').classList.toggle('reloading', !!me.reloading);
+    }
   }
   // rocket count badge
   const rb = $('rocketBadge');
@@ -1188,6 +1202,8 @@ function renderHUD() {
       label = 'FUZE ' + Math.ceil(rem/1000) + 's';
     } else if (me.cls === 'tank') {
       label = me.tank ? 'TANK ' + Math.ceil((me.tankRemaining||0)/1000) + 's' : 'KILLS ' + (me.tankKills||0) + '/3';
+    } else if (me.cls === 'pyro') {
+      label = '🔥 ALEV';
     }
     if (label) {
       ab.textContent = label;
@@ -1359,8 +1375,8 @@ function drawRocket(ctx, x, y, angle) {
 // Explosions (visual only, server emits 'explosion')
 const explosions = [];
 let lastExplodeSoundAt = 0;
-socket.on('explosion', ({x, y, r}) => {
-  explosions.push({x, y, r, t: Date.now()});
+socket.on('explosion', ({x, y, r, color}) => {
+  explosions.push({x, y, r, color: color || null, t: Date.now()});
   const now = Date.now();
   if (now - lastExplodeSoundAt > 70) {
     lastExplodeSoundAt = now;
@@ -1402,9 +1418,10 @@ function drawExplosions() {
     if (age > 400) { explosions.splice(i, 1); continue; }
     const a = 1 - age/400;
     const rr = e.r * (0.3 + 0.7 * (age/400));
-    gctx.fillStyle = `rgba(255, 200, 60, ${a * 0.6})`;
+    const isCyber = e.color === 'cyber';
+    gctx.fillStyle = isCyber ? `rgba(40, 180, 255, ${a * 0.6})` : `rgba(255, 200, 60, ${a * 0.6})`;
     gctx.beginPath(); gctx.arc(e.x - camX, e.y - camY, rr, 0, Math.PI*2); gctx.fill();
-    gctx.fillStyle = `rgba(255, 100, 40, ${a * 0.9})`;
+    gctx.fillStyle = isCyber ? `rgba(120, 230, 255, ${a * 0.9})` : `rgba(255, 100, 40, ${a * 0.9})`;
     gctx.beginPath(); gctx.arc(e.x - camX, e.y - camY, rr*0.6, 0, Math.PI*2); gctx.fill();
   }
 }
@@ -1614,7 +1631,13 @@ function render() {
     const x=b.x-camX, y=b.y-camY;
     if (x < -8 || y < -8 || x > W+8 || y > H+8) continue;
     if (b.type === 'rocket') drawRocket(gctx, x, y, b.angle||0);
-    else {
+    else if (b.type === 'flame') {
+      const flick = Math.random();
+      gctx.fillStyle = `rgba(255,${100+Math.floor(flick*80)},0,0.85)`;
+      gctx.beginPath(); gctx.arc(x, y, 4 + flick*3, 0, Math.PI*2); gctx.fill();
+      gctx.fillStyle = `rgba(255,240,80,0.7)`;
+      gctx.beginPath(); gctx.arc(x, y, 2, 0, Math.PI*2); gctx.fill();
+    } else {
       gctx.fillStyle='#000'; gctx.fillRect(x-3,y-3,6,6);
       gctx.fillStyle='#ffd24a'; gctx.fillRect(x-2,y-2,4,4);
     }
@@ -1637,6 +1660,16 @@ function render() {
         const hpw = 22, hpf = Math.max(0, pt.hp / pt.maxHp) * hpw;
         gctx.fillStyle = '#000'; gctx.fillRect(x-11, y-15, hpw, 4);
         gctx.fillStyle = '#7ad24a'; gctx.fillRect(x-11, y-15, hpf, 4);
+      }
+      // countdown timer
+      if (pt.expiresAt) {
+        const secsLeft = Math.max(0, Math.ceil((pt.expiresAt - Date.now()) / 1000));
+        gctx.font = 'bold 9px "Press Start 2P", monospace';
+        gctx.textAlign = 'center';
+        gctx.fillStyle = 'rgba(0,0,0,0.7)';
+        gctx.fillText(secsLeft + 's', x + 1, y - 19);
+        gctx.fillStyle = secsLeft <= 3 ? '#ff5555' : '#ffffaa';
+        gctx.fillText(secsLeft + 's', x, y - 20);
       }
     }
   }
@@ -1692,10 +1725,10 @@ function render() {
       gctx.save();
       gctx.translate(px, py);
       gctx.scale(1.5, 1.5);
-      drawRobotTopDown(gctx, 0, 0, p.color, p.angle, p.alive, p.id, p.x, p.y, p.hat||'', p.hatCfg);
+      drawRobotTopDown(gctx, 0, 0, p.color, p.angle, p.alive, p.id, p.x, p.y, p.hat||'', p.hatCfg, p.cls||'');
       gctx.restore();
     } else {
-      drawRobotTopDown(gctx, px, py, p.color, p.angle, p.alive, p.id, p.x, p.y, p.hat||'', p.hatCfg);
+      drawRobotTopDown(gctx, px, py, p.color, p.angle, p.alive, p.id, p.x, p.y, p.hat||'', p.hatCfg, p.cls||'');
     }
     // life pips — cached offscreen canvas avoids 130+ fillRect per player/frame
     const lives = typeof p.lives==='number' ? p.lives : 0;
