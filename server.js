@@ -320,6 +320,7 @@ function addPlayer(room, id, name, color, cls) {
     color: color || '#ff5577',
     cls: safeCls,
     hat: '',
+    hatCfg: null,
     x: s.x, y: s.y, angle: 0,
     hp: C.HP_PER_LIFE, lives: C.START_LIVES,
     alive: true,
@@ -345,7 +346,7 @@ function publicRoom(room) {
     mapName: room.mapName,
     count: room.players.size, max: C.MAX_PLAYERS,
     players: [...room.players.values()].map(p => ({
-      id: p.id, name: p.name, color: p.color, cls: p.cls, hat: p.hat,
+      id: p.id, name: p.name, color: p.color, cls: p.cls, hat: p.hat, hatCfg: p.hatCfg,
     })),
   };
 }
@@ -772,7 +773,7 @@ function tick(room) {
     io.to(room.code).emit('state', {
       t: now, endsAt: room.roundEndsAt,
       players: [...room.players.values()].map(p => ({
-        id:p.id, name:p.name, color:p.color, cls:p.cls, hat:p.hat,
+        id:p.id, name:p.name, color:p.color, cls:p.cls, hat:p.hat, hatCfg:p.hatCfg,
         x:p.x, y:p.y, angle:p.angle,
         hp:p.hp, lives:p.lives, maxHp: (now < p.tankUntil ? C.TANK_HP_BOOST : C.HP_PER_LIFE),
         ammo:p.ammo, maxAmmo:C.MAG_SIZE,
@@ -964,15 +965,22 @@ io.on('connection', (socket) => {
     io.to(room.code).emit('roomUpdate', publicRoom(room));
   });
 
-  socket.on('setHat', ({hat}) => {
+  socket.on('setHat', ({hat, cfg}) => {
     const code = socketRoom.get(socket.id);
     const room = code && rooms.get(code);
     if (!room) return;
     const p = room.players.get(socket.id);
     if (!p) return;
-    // Only accept .png filenames, no path traversal
     const safe = typeof hat === 'string' && /^[^/\\]+\.png$/i.test(hat) ? hat : '';
     p.hat = safe;
+    if (cfg && typeof cfg === 'object') {
+      const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, Number(v) || 0));
+      p.hatCfg = {
+        ox: clamp(cfg.ox, -2, 2),
+        oy: clamp(cfg.oy, -3, 1),
+        scale: clamp(cfg.scale, 0.3, 4),
+      };
+    }
     io.to(room.code).emit('roomUpdate', publicRoom(room));
   });
 

@@ -334,18 +334,34 @@ function getHatImg(name) {
   return img;
 }
 
+// Per-hat user adjustments persisted in localStorage as {ox, oy, scale}.
+// ox/oy are character-radius-relative offsets, scale multiplies base size.
+function getHatCfg(name) {
+  if (!name) return { ox: 0.18, oy: -0.35, scale: 1.5 };
+  try {
+    const raw = localStorage.getItem('gwHatCfg_' + name);
+    if (raw) return { ox: 0.18, oy: -0.35, scale: 1.5, ...JSON.parse(raw) };
+  } catch (e) {}
+  return { ox: 0.18, oy: -0.35, scale: 1.5 };
+}
+function setHatCfg(name, cfg) {
+  if (!name) return;
+  localStorage.setItem('gwHatCfg_' + name, JSON.stringify(cfg));
+}
+
 // Draw a hat sitting on top of a character at the given scale.
 // size = character diameter (e.g., 36 in-game, 220 in preview).
-function drawHat(ctx, name, size) {
+// cfg overrides per-hat tunings: {ox, oy, scale}.
+function drawHat(ctx, name, size, cfgOverride) {
   const img = getHatImg(name);
   if (!img || !img.complete || img.naturalWidth === 0) return;
   const r = size / 2;
   const aspect = img.naturalWidth / img.naturalHeight;
-  const hatW = Math.round(r * 1.5);
+  const cfg = cfgOverride || getHatCfg(name);
+  const hatW = Math.round(r * cfg.scale);
   const hatH = Math.round(hatW / aspect);
-  // Anchor hat by its bottom: works for any aspect ratio.
-  const x = Math.round(-hatW / 2 + r * 0.18);
-  const y = Math.round(-r * 0.35 - hatH);
+  const x = Math.round(-hatW / 2 + r * cfg.ox);
+  const y = Math.round(r * cfg.oy - hatH);
   ctx.drawImage(img, x, y, hatW, hatH);
 }
 
@@ -364,7 +380,7 @@ function updateRoll(id, wx, wy) {
   return s;
 }
 
-function drawRobotTopDown(ctx, x, y, color, angle, alive=true, id=null, wx=0, wy=0, hat='') {
+function drawRobotTopDown(ctx, x, y, color, angle, alive=true, id=null, wx=0, wy=0, hat='', hatCfg=null) {
   ctx.save();
   ctx.translate(x, y);
   if (!alive) ctx.globalAlpha = 0.35;
@@ -384,7 +400,7 @@ function drawRobotTopDown(ctx, x, y, color, angle, alive=true, id=null, wx=0, wy
     ctx.translate(0, -bob);
   }
   ctx.drawImage(getRobotBody(color, !hat), -_ROBOT_CX, -_ROBOT_CY);
-  if (hat) drawHat(ctx, hat, 36);
+  if (hat) drawHat(ctx, hat, 36, hatCfg);
   // draw weapon on top of character, rotated toward cursor
   if (_gunImg.complete && _gunImg.naturalWidth > 0) {
     ctx.save();
@@ -552,10 +568,63 @@ function renderPreview() {
     previewCtx.translate(180, 240);
     drawHat(previewCtx, state.hat, 220);
     previewCtx.restore();
+    previewCtx.fillStyle = 'rgba(255,210,74,0.8)';
+    previewCtx.font = '10px "Press Start 2P", monospace';
+    previewCtx.textAlign = 'center';
+    previewCtx.fillText('SAPKAYI SURUKLE / TEKERLEK = BUYUT', 180, 450);
   }
 }
 renderPreview();
 drawShirt($('shirtIcon').getContext('2d'));
+
+// ===== Hat drag/scale in preview =====
+(function () {
+  const PR = 110;          // character radius in preview (size 220 / 2)
+  const CX = 180, CY = 240;
+  let dragging = false;
+  let dragStart = null;
+  function localCoords(e) {
+    const r = previewCanvas.getBoundingClientRect();
+    const sx = previewCanvas.width / r.width;
+    const sy = previewCanvas.height / r.height;
+    return { mx: (e.clientX - r.left) * sx - CX, my: (e.clientY - r.top) * sy - CY };
+  }
+  previewCanvas.addEventListener('mousedown', e => {
+    if (!state.hat) return;
+    dragging = true;
+    dragStart = { ...localCoords(e), cfg: { ...getHatCfg(state.hat) } };
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const { mx, my } = localCoords(e);
+    const cfg = {
+      ...dragStart.cfg,
+      ox: dragStart.cfg.ox + (mx - dragStart.mx) / PR,
+      oy: dragStart.cfg.oy + (my - dragStart.my) / PR,
+    };
+    setHatCfg(state.hat, cfg);
+    renderPreview();
+  });
+  window.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    if (state.hat && state.roomId) {
+      const c = getHatCfg(state.hat);
+      socket.emit('setHat', { hat: state.hat, cfg: c });
+    }
+  });
+  previewCanvas.addEventListener('wheel', e => {
+    if (!state.hat) return;
+    e.preventDefault();
+    const cfg = getHatCfg(state.hat);
+    const step = e.deltaY > 0 ? 0.92 : 1.08;
+    cfg.scale = Math.max(0.5, Math.min(3.5, cfg.scale * step));
+    setHatCfg(state.hat, cfg);
+    renderPreview();
+    if (state.roomId) socket.emit('setHat', { hat: state.hat, cfg });
+  }, { passive: false });
+})();
 
 const palette = $('colorPalette');
 function addCloseBtn(el) {
@@ -1504,7 +1573,7 @@ function render() {
       gctx.fillStyle = `rgba(255,80,90,${pulse*0.35})`;
       gctx.beginPath(); gctx.arc(p.x-camX, p.y-camY, 28, 0, Math.PI*2); gctx.fill();
     }
-    drawRobotTopDown(gctx, p.x-camX, p.y-camY, p.color, p.angle, p.alive, p.id, p.x, p.y, p.hat||'');
+    drawRobotTopDown(gctx, p.x-camX, p.y-camY, p.color, p.angle, p.alive, p.id, p.x, p.y, p.hat||'', p.hatCfg);
     // life pips — cached offscreen canvas avoids 130+ fillRect per player/frame
     const lives = typeof p.lives==='number' ? p.lives : 0;
     const maxPips = 5, heartW = 10, gap = 3;
