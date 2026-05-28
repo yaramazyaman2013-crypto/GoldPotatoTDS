@@ -73,7 +73,8 @@ const C = {
   PYRO_FLAME_CD: 90,             // ms between flame chunks
   PYRO_FLAME_SPEED: 13,
   PYRO_FLAME_LIFE: 16,           // ~16 ticks * 13 speed = ~208px range
-  PYRO_FLAME_DMG: 0.5,
+  PYRO_FLAME_DMG: 0.3,
+  PYRO_HP_PER_LIFE: 12,          // pyro has more HP per life than others
   PYRO_FUEL_MAX: 50,             // max fuel shots
   PYRO_REFUEL_MS: 2000,          // refuel time when empty
   // Soda pickup (rare, +3 HP)
@@ -331,7 +332,7 @@ function addPlayer(room, id, name, color, cls) {
     hat: '',
     hatCfg: null,
     x: s.x, y: s.y, angle: 0,
-    hp: C.HP_PER_LIFE, lives: C.START_LIVES,
+    hp: cls === 'pyro' ? C.PYRO_HP_PER_LIFE : C.HP_PER_LIFE, lives: C.START_LIVES,
     alive: true,
     ammo: cls === 'pyro' ? C.PYRO_FUEL_MAX : C.MAG_SIZE, reloading: false, reloadEndsAt: 0,
     rockets: 0,
@@ -453,7 +454,7 @@ function startRound(room) {
   for (const p of room.players.values()) {
     const s = randomSpawnIn(room.walls);
     p.x = s.x; p.y = s.y;
-    p.hp = C.HP_PER_LIFE; p.lives = C.START_LIVES;
+    p.hp = p.cls === 'pyro' ? C.PYRO_HP_PER_LIFE : C.HP_PER_LIFE; p.lives = C.START_LIVES;
     p.alive = true; p.kills = 0; p.angle = 0; p.fireCd = 0;
     p.ammo = p.cls === 'pyro' ? C.PYRO_FUEL_MAX : C.MAG_SIZE; p.reloading = false; p.reloadEndsAt = 0;
     p.rockets = (p.cls === 'cyber') ? C.CYBER_START_ROCKETS : 0;
@@ -539,7 +540,7 @@ function tick(room) {
     }
     // Tank mode expiry
     const isTank = now < p.tankUntil;
-    const speedMul = isTank ? 0.7 : 1;
+    const speedMul = isTank ? 0.7 : (p.cls === 'pyro' ? 1.5 : 1);
     const playerR = isTank ? C.PLAYER_R + 12 : C.PLAYER_R;
 
     let dx = 0, dy = 0;
@@ -635,8 +636,9 @@ function tick(room) {
       for (const pl of room.players.values()) {
         if (!pl.alive) continue;
         const d2 = (pl.x-pet.x)**2 + (pl.y-pet.y)**2;
-        if (d2 < (C.PLAYER_R + C.PET_HEAL_R)**2 && pl.hp < C.HP_PER_LIFE) {
-          pl.hp = Math.min(C.HP_PER_LIFE, pl.hp + C.PET_HEAL_PER_TICK);
+        const plMaxHp = pl.cls === 'pyro' ? C.PYRO_HP_PER_LIFE : C.HP_PER_LIFE;
+        if (d2 < (C.PLAYER_R + C.PET_HEAL_R)**2 && pl.hp < plMaxHp) {
+          pl.hp = Math.min(plMaxHp, pl.hp + C.PET_HEAL_PER_TICK);
         }
       }
     }
@@ -712,7 +714,7 @@ function tick(room) {
       if (victim.lives <= 0) { victim.alive = false; }
       else {
         const s=randomSpawnIn(room.walls);
-        victim.x=s.x; victim.y=s.y; victim.hp=C.HP_PER_LIFE;
+        victim.x=s.x; victim.y=s.y; victim.hp=victim.cls==='pyro' ? C.PYRO_HP_PER_LIFE : C.HP_PER_LIFE;
         // Defensive: ensure cooldowns don't drift beyond their intended window
         const nowR = Date.now();
         if (victim.turretReadyAt > nowR + C.ENGINEER_TURRET_CD) victim.turretReadyAt = nowR + C.ENGINEER_TURRET_CD;
@@ -824,7 +826,7 @@ function tick(room) {
       players: [...room.players.values()].map(p => ({
         id:p.id, name:p.name, color:p.color, cls:p.cls, hat:p.hat, hatCfg:p.hatCfg,
         x:p.x, y:p.y, angle:p.angle,
-        hp:p.hp, lives:p.lives, maxHp: (now < p.tankUntil ? C.TANK_HP_BOOST : C.HP_PER_LIFE),
+        hp:p.hp, lives:p.lives, maxHp: (now < p.tankUntil ? C.TANK_HP_BOOST : (p.cls==='pyro' ? C.PYRO_HP_PER_LIFE : C.HP_PER_LIFE)),
         ammo:p.ammo, maxAmmo: p.cls === 'pyro' ? C.PYRO_FUEL_MAX : C.MAG_SIZE,
         reloading:p.reloading, reloadEndsAt:p.reloadEndsAt,
         rockets:p.rockets,
