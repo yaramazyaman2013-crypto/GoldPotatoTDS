@@ -511,14 +511,27 @@ function tick(room) {
       });
       if (p.ammo === 0) { p.reloading = true; p.reloadEndsAt = now + C.RELOAD_MS; }
     }
+    // Magnet: pull nearby pickups toward this player
+    const MAGNET_R = 90, MAGNET_R2 = MAGNET_R * MAGNET_R, MAGNET_SPEED = 5;
+    function magnet(item) {
+      const dx = p.x - item.x, dy = p.y - item.y;
+      const d2 = dx*dx + dy*dy;
+      if (d2 > MAGNET_R2 || d2 < 1) return;
+      const d = Math.sqrt(d2);
+      const step = Math.min(MAGNET_SPEED, d);
+      item.x += (dx/d) * step;
+      item.y += (dy/d) * step;
+    }
     for (let i = room.hearts.length-1; i >= 0; i--) {
       const h = room.hearts[i];
+      if (p.lives < C.MAX_LIVES) magnet(h);
       if ((h.x-p.x)**2+(h.y-p.y)**2 < (C.PLAYER_R+10)**2 && p.lives < C.MAX_LIVES) {
         p.lives++; room.hearts.splice(i,1);
       }
     }
     for (let i = room.rocketPickups.length-1; i >= 0; i--) {
       const r = room.rocketPickups[i];
+      magnet(r);
       if ((r.x-p.x)**2+(r.y-p.y)**2 < (C.PLAYER_R+12)**2) {
         p.rockets += C.ROCKET_CHARGES;
         room.rocketPickups.splice(i, 1);
