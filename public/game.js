@@ -249,7 +249,7 @@ const CLASS_INFO = {
   medic:    { label: 'DOKTOR',   desc: '65sn: Pet (V, 10sn ömür)<br>2.5dk: +1 can',       color: '#7ad24a' },
   tank:     { label: 'TANK',     desc: '3 kill: 30sn tank modu<br>25 HP, büyük, x2 hasar',color: '#ff5577' },
   pyro:     { label: 'PYRO',     desc: 'Alev silahı (50 yakıt)<br>Yakın mesafe, 2sn dolum', color: '#ff7a1a' },
-  sniper:   { label: 'SNIPER',   desc: '15 hasar, çok uzun menzil<br>1 mermi, 6sn reload<br>Orta tuş: bıçak (3 hasar)', color: '#c8ff5c' },
+  sniper:   { label: 'SNIPER',   desc: '15 hasar, çok uzun menzil<br>1 mermi, 6sn reload<br>Orta tuş: bıçak (4 hasar)', color: '#c8ff5c' },
 };
 
 // ===== Robot pixel art =====
