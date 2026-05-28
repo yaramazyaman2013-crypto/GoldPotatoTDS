@@ -401,20 +401,16 @@ function drawRobotTopDown(ctx, x, y, color, angle, alive=true, id=null, wx=0, wy
   ctx.save();
   ctx.translate(x, y);
   if (!alive) ctx.globalAlpha = 0.35;
-  // Rolling animation: smooth time-based wobble when moving
+  // Walking bob animation — translate only (no rotation to avoid pixelation)
   const rs = id ? updateRoll(id, wx, wy) : null;
   if (rs && rs.speed > 0.5 && alive) {
     const now = Date.now();
-    const moveAng = Math.atan2(rs.vy, rs.vx);
-    const lean = 0.12;
-    const wobble = Math.sin(now / 100) * 0.08;
-    const bob = Math.abs(Math.sin(now / 100)) * 1.5;
-    ctx.rotate(moveAng);
-    ctx.rotate(lean + wobble);
-    ctx.rotate(-moveAng);
+    const bob = Math.abs(Math.sin(now / 130)) * 2;
     ctx.translate(0, -bob);
   }
+  ctx.imageSmoothingEnabled = true;
   ctx.drawImage(getRobotBody(color, !hat), -_ROBOT_CX, -_ROBOT_CY);
+  ctx.imageSmoothingEnabled = false;
   if (hat) drawHat(ctx, hat, 36, hatCfg);
   // draw weapon rotated toward cursor
   const weaponImg = cls === 'pyro' ? _flameImg : _gunImg;
