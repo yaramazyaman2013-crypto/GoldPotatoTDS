@@ -92,7 +92,7 @@ const C = {
   SODA_SPAWN_MS:   45 * 1000,
   MAX_SODAS:       2,
   SODA_HEAL:       3,
-  SODA_SPAWN_CHANCE: 0.7,
+  SODA_SPAWN_CHANCE: 0.87,
   // Turret
   TURRET_HP: 40,
   TURRET_MOVE_SPEED: 3.2,
