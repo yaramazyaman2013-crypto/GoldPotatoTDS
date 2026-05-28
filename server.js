@@ -520,6 +520,36 @@ function tryMove(p, dx, dy, r) {
   if (stuck || !hitsWallList(walls, p.x, ny, rr)) p.y = ny;
 }
 
+function applyDamage(room, victim, dmg, killerId) {
+  victim.hp -= dmg;
+  if (victim.hp <= 0) {
+    victim.lives--;
+    const killer = room.players.get(killerId);
+    if (killer && killer !== victim) {
+      killer.kills++;
+      if (killer.cls === 'tank' && Date.now() >= killer.tankUntil) {
+        killer.tankKills++;
+        if (killer.tankKills >= C.TANK_KILLS_REQUIRED) {
+          killer.tankKills = 0;
+          killer.tankUntil = Date.now() + C.TANK_DURATION;
+          killer.hp = C.TANK_HP_BOOST;
+          io.to(room.code).emit('tankMode', {id: killer.id, until: killer.tankUntil});
+        }
+      }
+    }
+    io.to(room.code).emit('kill', {killer: killer?killer.name:'?', victim: victim.name});
+    if (victim.lives <= 0) { victim.alive = false; }
+    else {
+      const s = randomSpawnIn(room.walls);
+      victim.x = s.x; victim.y = s.y;
+      victim.hp = victim.cls === 'pyro' ? C.PYRO_HP_PER_LIFE : C.HP_PER_LIFE;
+      const nowR = Date.now();
+      if (victim.turretReadyAt > nowR + C.ENGINEER_TURRET_CD) victim.turretReadyAt = nowR + C.ENGINEER_TURRET_CD;
+      if (victim.petReadyAt    > nowR + C.MEDIC_PET_CD)       victim.petReadyAt    = nowR + C.MEDIC_PET_CD;
+    }
+  }
+}
+
 function tick(room) {
   if (!room.started) return;
   const now = Date.now();
@@ -713,37 +743,6 @@ function tick(room) {
     }
   }
 
-  function applyDamage(victim, dmg, killerId) {
-    victim.hp -= dmg;
-    if (victim.hp <= 0) {
-      victim.lives--;
-      const killer = room.players.get(killerId);
-      if (killer && killer !== victim) {
-        killer.kills++;
-        // Tank class: counts kills, transforms at threshold
-        if (killer.cls === 'tank' && Date.now() >= killer.tankUntil) {
-          killer.tankKills++;
-          if (killer.tankKills >= C.TANK_KILLS_REQUIRED) {
-            killer.tankKills = 0;
-            killer.tankUntil = Date.now() + C.TANK_DURATION;
-            killer.hp = C.TANK_HP_BOOST;
-            io.to(room.code).emit('tankMode', {id: killer.id, until: killer.tankUntil});
-          }
-        }
-      }
-      io.to(room.code).emit('kill', {killer: killer?killer.name:'?', victim: victim.name});
-      if (victim.lives <= 0) { victim.alive = false; }
-      else {
-        const s=randomSpawnIn(room.walls);
-        victim.x=s.x; victim.y=s.y; victim.hp=victim.cls==='pyro' ? C.PYRO_HP_PER_LIFE : C.HP_PER_LIFE;
-        // Defensive: ensure cooldowns don't drift beyond their intended window
-        const nowR = Date.now();
-        if (victim.turretReadyAt > nowR + C.ENGINEER_TURRET_CD) victim.turretReadyAt = nowR + C.ENGINEER_TURRET_CD;
-        if (victim.petReadyAt    > nowR + C.MEDIC_PET_CD)       victim.petReadyAt    = nowR + C.MEDIC_PET_CD;
-      }
-    }
-  }
-
   for (let i = room.bullets.length-1; i >= 0; i--) {
     const b = room.bullets[i];
     b.x += b.vx; b.y += b.vy; b.life--;
@@ -776,7 +775,7 @@ function tick(room) {
         if ((p.x-b.x)**2+(p.y-b.y)**2 < (pr + r)**2) {
           if (isRocket) { detonated = true; }
           else {
-            applyDamage(p, b.dmg || 1, b.owner);
+            applyDamage(room, p, b.dmg || 1, b.owner);
             room.bullets.splice(i,1);
             hitSomething = true;
           }
@@ -824,7 +823,7 @@ function tick(room) {
         const d2 = (p.x-b.x)**2 + (p.y-b.y)**2;
         if (d2 < C.ROCKET_AOE_R**2) {
           // Fixed 10 damage regardless of distance
-          applyDamage(p, 10, b.owner);
+          applyDamage(room, p, 10, b.owner);
         }
       }
       // splash damage to turrets (sabit ~%30 hasar, 3-4 roket dayanır)
@@ -1052,7 +1051,7 @@ io.on('connection', (socket) => {
       while (da > Math.PI) da -= Math.PI * 2;
       while (da < -Math.PI) da += Math.PI * 2;
       if (Math.abs(da) > halfArc) continue;
-      applyDamage(target, C.KNIFE_DMG, p.id);
+      applyDamage(room, target, C.KNIFE_DMG, p.id);
     }
   });
 
