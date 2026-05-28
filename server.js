@@ -54,7 +54,8 @@ const C = {
   TANK_KILLS_REQUIRED:   5,
   TANK_DURATION:         20 * 1000,
   // Turret
-  TURRET_HP: 25,
+  TURRET_HP: 45,
+  TURRET_MOVE_SPEED: 3.2, // px per tick (~128 px/sec at 40Hz) — visibly walking
   TURRET_RANGE: 280,
   TURRET_FIRE_CD: 600,
   TURRET_BULLET_SPEED: 12,
@@ -511,10 +512,24 @@ function tick(room) {
     }
   }
 
-  // Turrets: target nearest enemy in range, fire
+  // Turrets: walk toward target point if relocating, then target/fire.
   for (let ti = room.turrets.length-1; ti >= 0; ti--) {
     const t = room.turrets[ti];
     if (t.hp <= 0) { room.turrets.splice(ti, 1); continue; }
+    if (t.targetX !== undefined) {
+      const dx = t.targetX - t.x, dy = t.targetY - t.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist <= C.TURRET_MOVE_SPEED) {
+        t.x = t.targetX; t.y = t.targetY;
+        t.targetX = undefined; t.targetY = undefined;
+      } else {
+        const nx = t.x + (dx / dist) * C.TURRET_MOVE_SPEED;
+        const ny = t.y + (dy / dist) * C.TURRET_MOVE_SPEED;
+        // step axis-by-axis so a wall on one side doesn't fully halt us
+        if (!hitsWallList(room.walls, nx, t.y, 14)) t.x = nx;
+        if (!hitsWallList(room.walls, t.x, ny, 14)) t.y = ny;
+      }
+    }
     let target = null, bestD = C.TURRET_RANGE * C.TURRET_RANGE;
     for (const pl of room.players.values()) {
       if (!pl.alive || pl.id === t.owner) continue;
@@ -739,8 +754,8 @@ io.on('connection', (socket) => {
     p.turretReadyAt = Date.now() + C.ENGINEER_TURRET_CD;
   });
 
-  // Engineer can relocate their own turret by middle-clicking; the target
-  // point must not overlap a wall and the engineer must be reasonably close.
+  // Engineer commands their own turret to walk toward a point. The turret
+  // doesn't teleport — its tick loop steps it toward (targetX, targetY).
   socket.on('moveTurret', ({x, y}) => {
     const code = socketRoom.get(socket.id);
     const room = code && rooms.get(code);
@@ -752,11 +767,10 @@ io.on('connection', (socket) => {
     const ty = Math.max(20, Math.min(C.MAP_H - 20, y));
     const mine = room.turrets.find(t => t.owner === p.id);
     if (!mine) return;
-    // require engineer within reach of the target so it's not a free teleport
     const dx = p.x - tx, dy = p.y - ty;
     if (dx*dx + dy*dy > 260*260) return;
     if (hitsWallList(room.walls, tx, ty, 14)) return;
-    mine.x = tx; mine.y = ty;
+    mine.targetX = tx; mine.targetY = ty;
   });
 
   socket.on('placePet', () => {
