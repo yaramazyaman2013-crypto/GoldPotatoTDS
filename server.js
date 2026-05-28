@@ -78,7 +78,7 @@ const C = {
   TURRET_MOVE_SPEED: 3.2, // px per tick (~128 px/sec at 40Hz) — visibly walking
   TURRET_RANGE: 460,
   TURRET_FIRE_CD: 120,           // rapid fire between shots
-  TURRET_MAG_SIZE: 35,           // shots before reload
+  TURRET_MAG_SIZE: 25,           // shots before reload
   TURRET_RELOAD_MS: 3000,        // 3sn reload
   TURRET_BULLET_DMG: 2,
   TURRET_BULLET_SPEED: 12,
@@ -899,6 +899,14 @@ io.on('connection', (socket) => {
     if (!p || !p.alive || p.cls !== 'engineer') return;
     if (Date.now() < p.turretReadyAt) return;
     if (hitsWallList(room.walls, p.x, p.y, 14)) return;
+    // Remove existing turret(s) owned by this engineer; 2. taret çıkınca eskisi yok olur
+    for (let i = room.turrets.length - 1; i >= 0; i--) {
+      if (room.turrets[i].owner === p.id) {
+        const old = room.turrets[i];
+        io.to(room.code).emit('explosion', {x: old.x, y: old.y, r: 40});
+        room.turrets.splice(i, 1);
+      }
+    }
     room.turrets.push({
       id: room.nextTurretId++,
       owner: p.id, x: p.x, y: p.y,
