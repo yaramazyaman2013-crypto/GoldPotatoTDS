@@ -337,16 +337,18 @@ canvas { image-rendering: pixelated; display: block; }
 
 /* CLASS PICKER */
 .class-picker {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
-  max-width: 360px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+  max-width: 520px;
+  margin-top: 12px;
 }
 .class-btn {
-  text-align: left; padding: 8px 10px; font-size: 9px;
+  text-align: left; padding: 14px 16px; font-size: 10px;
+  min-height: 70px;
 }
 .class-btn.selected { box-shadow: 4px 4px 0 #8a4a00, 0 0 0 3px #7afcff; }
-.cls-label { font-size: 11px; margin-bottom: 4px; }
-.cls-desc { font-size: 7px; color: #8a7aa6; }
-.cls-tag { font-size: 8px; margin-left: 6px; }
+.cls-label { font-size: 13px; margin-bottom: 8px; }
+.cls-desc { font-size: 9px; line-height: 1.6; color: #c6b4e0; }
+.cls-tag { font-size: 9px; margin-left: 6px; }
 
 /* MAP PICKER */
 .map-row {
