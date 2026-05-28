@@ -234,6 +234,7 @@ const state = {
   name: NAME_POOL[Math.floor(Math.random()*NAME_POOL.length)] + Math.floor(Math.random()*1000),
   color: COLORS[Math.floor(Math.random()*8)],
   cls: localStorage.getItem('gwClass') || 'cyber',
+  hat: localStorage.getItem('gwHat') || '',
   mapName: 'default',
   roomId: null, ownerId: null, selfId: null,
   isHost: false,
@@ -320,6 +321,30 @@ function getRobotBody(color) {
 const _gunImg = new Image();
 _gunImg.src = 'gun.png';
 
+// Hat image cache (key: filename, value: Image)
+const _hatImgCache = new Map();
+function getHatImg(name) {
+  if (!name) return null;
+  let img = _hatImgCache.get(name);
+  if (img) return img;
+  img = new Image();
+  img.src = 'hats/' + encodeURIComponent(name);
+  _hatImgCache.set(name, img);
+  return img;
+}
+
+// Draw a hat sitting on top of a character at the given scale.
+// size = character diameter (e.g., 36 in-game, 220 in preview).
+function drawHat(ctx, name, size) {
+  const img = getHatImg(name);
+  if (!img || !img.complete || img.naturalWidth === 0) return;
+  const r = size / 2;
+  const aspect = img.naturalWidth / img.naturalHeight;
+  const hatW = r * 1.7;
+  const hatH = hatW / aspect;
+  ctx.drawImage(img, -hatW / 2, -r - hatH * 0.55, hatW, hatH);
+}
+
 // Per-player roll state: tracks world position for smooth velocity
 const _rollState = new Map();
 function updateRoll(id, wx, wy) {
@@ -335,7 +360,7 @@ function updateRoll(id, wx, wy) {
   return s;
 }
 
-function drawRobotTopDown(ctx, x, y, color, angle, alive=true, id=null, wx=0, wy=0) {
+function drawRobotTopDown(ctx, x, y, color, angle, alive=true, id=null, wx=0, wy=0, hat='') {
   ctx.save();
   ctx.translate(x, y);
   if (!alive) ctx.globalAlpha = 0.35;
@@ -355,6 +380,7 @@ function drawRobotTopDown(ctx, x, y, color, angle, alive=true, id=null, wx=0, wy
     ctx.translate(0, -bob);
   }
   ctx.drawImage(getRobotBody(color), -_ROBOT_CX, -_ROBOT_CY);
+  if (hat) drawHat(ctx, hat, 36);
   // draw weapon on top of character, rotated toward cursor
   if (_gunImg.complete && _gunImg.naturalWidth > 0) {
     ctx.save();
@@ -515,6 +541,12 @@ function renderPreview() {
   previewCtx.fillRect(0, 360, 360, 100);
   // character centered, large
   drawCuteCharacter(previewCtx, 180, 240, 220, state.color);
+  if (state.hat) {
+    previewCtx.save();
+    previewCtx.translate(180, 240);
+    drawHat(previewCtx, state.hat, 220);
+    previewCtx.restore();
+  }
 }
 renderPreview();
 drawShirt($('shirtIcon').getContext('2d'));
@@ -538,6 +570,56 @@ COLORS.forEach(c => {
 });
 
 $('btnWardrobe').addEventListener('click', () => palette.classList.toggle('hidden'));
+
+// ===== Hat picker =====
+const hatPalette = $('hatPalette');
+function makeHatSwatch(name) {
+  const cv = document.createElement('canvas');
+  cv.width = 64; cv.height = 64;
+  const cctx = cv.getContext('2d');
+  cctx.imageSmoothingEnabled = true;
+  // mini character with hat preview
+  drawCuteCharacter(cctx, 32, 40, 36, state.color);
+  const img = getHatImg(name);
+  const drawHatPreview = () => {
+    cctx.save(); cctx.translate(32, 40);
+    drawHat(cctx, name, 36);
+    cctx.restore();
+  };
+  if (img.complete && img.naturalWidth > 0) drawHatPreview();
+  else img.addEventListener('load', drawHatPreview, { once: true });
+  if (state.hat === name) cv.classList.add('selected');
+  cv.addEventListener('click', () => {
+    state.hat = name;
+    localStorage.setItem('gwHat', name);
+    hatPalette.querySelectorAll('canvas, .none-opt').forEach(x => x.classList.remove('selected'));
+    cv.classList.add('selected');
+    renderPreview();
+    if (state.roomId) socket.emit('setHat', { hat: name });
+  });
+  return cv;
+}
+function loadHats() {
+  hatPalette.innerHTML = '';
+  const none = document.createElement('div');
+  none.className = 'none-opt';
+  none.textContent = 'YOK';
+  if (!state.hat) none.classList.add('selected');
+  none.addEventListener('click', () => {
+    state.hat = '';
+    localStorage.setItem('gwHat', '');
+    hatPalette.querySelectorAll('canvas, .none-opt').forEach(x => x.classList.remove('selected'));
+    none.classList.add('selected');
+    renderPreview();
+    if (state.roomId) socket.emit('setHat', { hat: '' });
+  });
+  hatPalette.appendChild(none);
+  fetch('/api/hats').then(r => r.json()).then(list => {
+    for (const name of list) hatPalette.appendChild(makeHatSwatch(name));
+  }).catch(() => {});
+}
+loadHats();
+$('btnHat').addEventListener('click', () => hatPalette.classList.toggle('hidden'));
 applyLang(currentLang);
 
 $('btnPlay').addEventListener('click', () => { show('rooms'); setNetStatus(''); });
@@ -581,6 +663,7 @@ $('btnCreateRoom').addEventListener('click', async () => {
       state.isHost = true;
       state.selfId = socket.id;
       enterLobby(res.roomId, res.ownerId);
+      if (state.hat) socket.emit('setHat', { hat: state.hat });
       if (res.room) renderLobby(res.room);
     } else {
       alert((res && res.error) || 'Bağlanılamadı');
@@ -604,6 +687,7 @@ function joinRoom(code) {
       state.isHost = false;
       state.selfId = res.selfId || socket.id;
       enterLobby(res.roomId, res.ownerId);
+      if (state.hat) socket.emit('setHat', { hat: state.hat });
       if (res.room) renderLobby(res.room);
     } else {
       alert((res && res.error) || 'Bağlanılamadı');
@@ -1405,7 +1489,7 @@ function render() {
       gctx.fillStyle = `rgba(255,80,90,${pulse*0.35})`;
       gctx.beginPath(); gctx.arc(p.x-camX, p.y-camY, 28, 0, Math.PI*2); gctx.fill();
     }
-    drawRobotTopDown(gctx, p.x-camX, p.y-camY, p.color, p.angle, p.alive, p.id, p.x, p.y);
+    drawRobotTopDown(gctx, p.x-camX, p.y-camY, p.color, p.angle, p.alive, p.id, p.x, p.y, p.hat||'');
     gctx.fillStyle='#000'; gctx.fillRect(p.x-camX-30, p.y-camY-30, 60, 12);
     gctx.fillStyle = p.id===socket.id ? '#ffd24a' : '#fff';
     gctx.font='10px "Press Start 2P",monospace'; gctx.textAlign='center';
