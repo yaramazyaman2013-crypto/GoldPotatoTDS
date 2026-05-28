@@ -329,7 +329,7 @@ function _pyroFireTrigger() {
     _pyroFireAudio = new Audio('fire.mp3');
     _pyroFireAudio.loop = true;
   }
-  _pyroFireAudio.volume = Math.min(1, (AUD.volume || 0.5) * 0.25);
+  _pyroFireAudio.volume = Math.min(1, (AUD.volume || 0.5) * 0.125);
   if (_pyroFireAudio.paused) _pyroFireAudio.play().catch(() => {});
   clearTimeout(_pyroFireStopId);
   _pyroFireStopId = setTimeout(() => { if (_pyroFireAudio) _pyroFireAudio.pause(); }, 320);
