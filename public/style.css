@@ -357,7 +357,7 @@ canvas { image-rendering: pixelated; display: block; }
 }
 .class-btn.selected { box-shadow: 4px 4px 0 #8a4a00, 0 0 0 3px #7afcff; }
 .cls-label { font-size: 14px; margin-bottom: 10px; }
-.cls-desc { font-size: 10px; line-height: 1.8; color: #d6c4f0; }
+.cls-desc { font-size: 10px; line-height: 1.8; color: #fff; }
 .cls-tag { font-size: 9px; margin-left: 6px; }
 
 /* MAP PICKER */
