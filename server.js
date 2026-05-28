@@ -54,7 +54,7 @@ const C = {
   TANK_KILLS_REQUIRED:   5,
   TANK_DURATION:         20 * 1000,
   // Turret
-  TURRET_HP: 8,
+  TURRET_HP: 25,
   TURRET_RANGE: 280,
   TURRET_FIRE_CD: 600,
   TURRET_BULLET_SPEED: 12,
@@ -154,7 +154,9 @@ function getMapWalls(mapName) {
   return walls;
 }
 
-const WALL_KINDS = ['stone','wood','brick','mesh','tree'];
+const WALL_KINDS = ['stone','wood','brick','mesh','tree','water'];
+// Water blocks players but bullets/rockets fly over it.
+const PASSABLE_FOR_BULLETS = new Set(['water']);
 const MESH_HP = 4;
 function sanitizeWalls(walls) {
   const out = [];
@@ -200,7 +202,9 @@ function hitsWallList(walls, x, y, r) {
   return !!findWallHit(walls, x, y, r);
 }
 
-function findWallHit(walls, x, y, r) {
+// `skip` (optional Set) — wall kinds to ignore. Used for bullets so they
+// can fly over water while players are still blocked by it.
+function findWallHit(walls, x, y, r, skip) {
   if (walls.__index) {
     const idx = walls.__index;
     const cx = Math.floor(x / SPATIAL_CELL);
@@ -209,11 +213,17 @@ function findWallHit(walls, x, y, r) {
       for (let dx = -1; dx <= 1; dx++) {
         const bucket = idx.get((cx+dx) * 65536 + (cy+dy));
         if (!bucket) continue;
-        for (const w of bucket) if (circleRect(x, y, r, w)) return w;
+        for (const w of bucket) {
+          if (skip && skip.has(w.kind)) continue;
+          if (circleRect(x, y, r, w)) return w;
+        }
       }
     return null;
   }
-  for (const w of walls) if (circleRect(x, y, r, w)) return w;
+  for (const w of walls) {
+    if (skip && skip.has(w.kind)) continue;
+    if (circleRect(x, y, r, w)) return w;
+  }
   return null;
 }
 
@@ -562,7 +572,7 @@ function tick(room) {
       else { room.bullets.splice(i,1); continue; }
     }
     if (!detonated) {
-      const w = findWallHit(room.walls, b.x, b.y, r);
+      const w = findWallHit(room.walls, b.x, b.y, r, PASSABLE_FOR_BULLETS);
       if (w) {
         if (w.kind === 'mesh' && w.hp !== Infinity) {
           w.hp -= (b.dmg || 1);
@@ -642,7 +652,7 @@ function tick(room) {
       bullets: room.bullets.map(b=>({x:b.x, y:b.y, type:b.type||'bullet', angle:b.angle})),
       hearts:  room.hearts.map(h=>({x:h.x, y:h.y})),
       rocketPickups: room.rocketPickups.map(r=>({x:r.x, y:r.y})),
-      turrets: room.turrets.map(t=>({x:t.x, y:t.y, angle:t.angle||0, hp:t.hp, owner:t.owner})),
+      turrets: room.turrets.map(t=>({x:t.x, y:t.y, angle:t.angle||0, hp:t.hp, maxHp:C.TURRET_HP, owner:t.owner})),
       pets:    room.pets.map(pt=>({x:pt.x, y:pt.y, expiresAt:pt.expiresAt, owner:pt.owner})),
     });
   }
@@ -727,6 +737,26 @@ io.on('connection', (socket) => {
       hp: C.TURRET_HP, angle: 0, nextFireAt: 0,
     });
     p.turretReadyAt = Date.now() + C.ENGINEER_TURRET_CD;
+  });
+
+  // Engineer can relocate their own turret by middle-clicking; the target
+  // point must not overlap a wall and the engineer must be reasonably close.
+  socket.on('moveTurret', ({x, y}) => {
+    const code = socketRoom.get(socket.id);
+    const room = code && rooms.get(code);
+    if (!room || !room.started) return;
+    const p = room.players.get(socket.id);
+    if (!p || !p.alive || p.cls !== 'engineer') return;
+    if (typeof x !== 'number' || typeof y !== 'number') return;
+    const tx = Math.max(20, Math.min(C.MAP_W - 20, x));
+    const ty = Math.max(20, Math.min(C.MAP_H - 20, y));
+    const mine = room.turrets.find(t => t.owner === p.id);
+    if (!mine) return;
+    // require engineer within reach of the target so it's not a free teleport
+    const dx = p.x - tx, dy = p.y - ty;
+    if (dx*dx + dy*dy > 260*260) return;
+    if (hitsWallList(room.walls, tx, ty, 14)) return;
+    mine.x = tx; mine.y = ty;
   });
 
   socket.on('placePet', () => {

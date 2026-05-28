@@ -524,12 +524,23 @@ gameCanvas.addEventListener('mousemove', e => {
 gameCanvas.addEventListener('mousedown', e => {
   if (e.button === 0) leftDown = true;
   if (e.button === 2) { rightDown = true; e.preventDefault(); }
+  if (e.button === 1) {
+    // Middle click: engineer relocates their turret to cursor world position
+    if (state.inGame && state.serverState) {
+      const me = state.serverState.players.find(p => p.id === socket.id);
+      if (me && me.alive && me.cls === 'engineer') {
+        socket.emit('moveTurret', { x: mouseX + camX, y: mouseY + camY });
+      }
+    }
+    e.preventDefault();
+  }
 });
 window.addEventListener('mouseup', e => {
   if (e.button === 0) leftDown = false;
   if (e.button === 2) rightDown = false;
 });
 gameCanvas.addEventListener('contextmenu', e => e.preventDefault());
+gameCanvas.addEventListener('auxclick', e => { if (e.button === 1) e.preventDefault(); });
 
 function computeAngle() {
   // Use real server state (not interpolated) for aim so server knows
@@ -792,22 +803,30 @@ function renderHUD() {
   }
 }
 
-// Stone texture (webp). Loaded once, scaled to a small tile, then used as
-// repeating pattern so it actually reads as bricks at wall scale (40px cells).
-const stoneImg = new Image();
-let stonePattern = null;
-const STONE_TILE = 64;
-stoneImg.onload = () => {
-  const tile = document.createElement('canvas');
-  tile.width = STONE_TILE; tile.height = STONE_TILE;
-  const tctx = tile.getContext('2d');
-  tctx.imageSmoothingEnabled = false;
-  tctx.drawImage(stoneImg, 0, 0, STONE_TILE, STONE_TILE);
-  stonePattern = tctx.createPattern(tile, 'repeat');
-  if (state.inGame) rebuildGroundCache();
-};
-stoneImg.onerror = () => console.warn('[stone] texture failed to load');
-stoneImg.src = 'stone.webp';
+// Texture loader: each image is downscaled into a 64x64 tile then turned
+// into a repeating CanvasPattern. Patterns become available as soon as the
+// image arrives; rebuildGroundCache is re-run to pick them up.
+const TEX_TILE = 64;
+const TEXTURES = {};
+function loadTexture(key, src) {
+  const img = new Image();
+  img.onload = () => {
+    const tile = document.createElement('canvas');
+    tile.width = TEX_TILE; tile.height = TEX_TILE;
+    const tctx = tile.getContext('2d');
+    tctx.imageSmoothingEnabled = false;
+    tctx.drawImage(img, 0, 0, TEX_TILE, TEX_TILE);
+    TEXTURES[key] = { img, tile, pattern: tctx.createPattern(tile, 'repeat') };
+    if (state.inGame) rebuildGroundCache();
+  };
+  img.onerror = () => console.warn('[tex]', key, 'failed:', src);
+  img.src = src;
+}
+loadTexture('stone', 'stone.webp');
+loadTexture('wood',  'wood.jpg');
+loadTexture('brick', 'brick.jpg');
+loadTexture('mesh',  'rusty.png');
+loadTexture('water', 'water.png');
 
 function drawTree(ctx, x, y, w, h) {
   // foliage circle + trunk; sized to the cell rect
@@ -830,51 +849,43 @@ function drawTree(ctx, x, y, w, h) {
 
 function drawWall(ctx, x, y, w, h, kind) {
   if (kind === 'tree') { drawTree(ctx, x, y, w, h); return; }
+  if (kind === 'water') { drawWater(ctx, x, y, w, h); return; }
   const s = WALL_STYLES[kind] || WALL_STYLES.stone;
-  if (kind === 'stone' && stonePattern) {
-    // Tile the webp texture; keep light/dark edges on top for chunky 3D look
+  const tex = TEXTURES[kind];
+  if (tex && tex.pattern) {
     ctx.save();
     ctx.translate(x, y);
-    ctx.fillStyle = stonePattern;
+    ctx.fillStyle = tex.pattern;
     ctx.fillRect(0, 0, w, h);
     ctx.restore();
+    // chunky 3D bevel on top
     ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.fillRect(x, y, w, 2); ctx.fillRect(x, y, 2, h);
     ctx.fillStyle = 'rgba(0,0,0,0.35)';       ctx.fillRect(x, y+h-2, w, 2); ctx.fillRect(x+w-2, y, 2, h);
     return;
   }
+  // Procedural fallback (used until images load, or for kinds without textures)
   ctx.fillStyle = s.base; ctx.fillRect(x, y, w, h);
   ctx.fillStyle = s.light; ctx.fillRect(x, y, w, 3); ctx.fillRect(x, y, 3, h);
   ctx.fillStyle = s.dark;  ctx.fillRect(x, y+h-3, w, 3); ctx.fillRect(x+w-3, y, 3, h);
-  if (kind === 'brick') {
-    // brick courses
-    ctx.fillStyle = s.dark;
-    for (let by = 10; by < h-2; by += 14) ctx.fillRect(x, y+by, w, 1);
-    for (let by = 0; by < h; by += 14) {
-      const offset = ((by/14)|0) % 2 === 0 ? 0 : 24;
-      for (let bx = offset+12; bx < w-2; bx += 48) ctx.fillRect(x+bx, y+by+1, 1, 12);
-    }
-  } else if (kind === 'wood') {
-    // wood planks (horizontal)
-    ctx.fillStyle = s.dark;
-    for (let by = 10; by < h-2; by += 12) ctx.fillRect(x, y+by, w, 1);
-    // knots
-    ctx.fillStyle = s.dark;
-    for (let bx = 8; bx < w; bx += 28) { ctx.fillRect(x+bx, y+5, 2, 2); }
-  } else if (kind === 'mesh') {
-    // rusty wire mesh — diagonal cross-hatch
-    ctx.fillStyle = '#2a1f10';
-    for (let by = 0; by < h; by += 4) ctx.fillRect(x+3, y+by, w-6, 1);
-    for (let bx = 0; bx < w; bx += 4) ctx.fillRect(x+bx, y+3, 1, h-6);
-    // rust spots
-    ctx.fillStyle = '#7a3a14';
-    for (let bx = 6; bx < w-4; bx += 18) for (let by = 6; by < h-4; by += 18) {
-      ctx.fillRect(x+bx, y+by, 2, 2);
-    }
+  ctx.fillStyle = s.dark;
+  for (let bx = 12; bx < w-4; bx += 16) ctx.fillRect(x+bx, y+3, 1, h-6);
+}
+
+function drawWater(ctx, x, y, w, h) {
+  const tex = TEXTURES.water;
+  if (tex && tex.pattern) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.fillStyle = tex.pattern;
+    ctx.fillRect(0, 0, w, h);
+    ctx.restore();
   } else {
-    // stone seams
-    ctx.fillStyle = s.dark;
-    for (let bx = 12; bx < w-4; bx += 16) ctx.fillRect(x+bx, y+3, 1, h-6);
+    ctx.fillStyle = '#2a6a9a'; ctx.fillRect(x, y, w, h);
   }
+  // Soft dark edge so water reads as a sunken area
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.fillRect(x, y, w, 2); ctx.fillRect(x, y, 2, h);
+  ctx.fillRect(x, y+h-2, w, 2); ctx.fillRect(x+w-2, y, 2, h);
 }
 
 function drawRocketPickup(ctx, x, y) {
@@ -1096,7 +1107,21 @@ function render() {
   if (ss.turrets) {
     for (const tu of ss.turrets) {
       const x = tu.x - camX, y = tu.y - camY;
-      // base
+      // wheels (left + right), drawn under the chassis
+      gctx.fillStyle = '#0a0a0a';
+      gctx.fillRect(x-13, y-9, 4, 18); gctx.fillRect(x+9, y-9, 4, 18);
+      gctx.fillStyle = '#2a2a30';
+      gctx.fillRect(x-12, y-8, 2, 16); gctx.fillRect(x+10, y-8, 2, 16);
+      // wheel hubs
+      gctx.fillStyle = '#6a6a7a';
+      gctx.fillRect(x-12, y-1, 2, 2); gctx.fillRect(x+10, y-1, 2, 2);
+      // wheel tread marks
+      gctx.fillStyle = '#1a1a22';
+      for (let wy = -7; wy <= 6; wy += 4) {
+        gctx.fillRect(x-13, y+wy, 4, 1);
+        gctx.fillRect(x+9,  y+wy, 4, 1);
+      }
+      // base / chassis
       gctx.fillStyle = '#0a0a0a'; gctx.fillRect(x-10, y-10, 20, 20);
       gctx.fillStyle = '#5a5a6a'; gctx.fillRect(x-9, y-9, 18, 18);
       gctx.fillStyle = '#8a8a9a'; gctx.fillRect(x-9, y-9, 18, 2);
@@ -1107,10 +1132,11 @@ function render() {
       gctx.fillStyle = '#1a1a24'; gctx.fillRect(0, -2, 14, 4);
       gctx.fillStyle = '#3a3a4a'; gctx.fillRect(0, -2, 14, 1);
       gctx.restore();
-      // hp bar
-      const hpw = 18, hpf = Math.max(0, tu.hp / 8) * hpw;
-      gctx.fillStyle = '#000'; gctx.fillRect(x-9, y-14, hpw, 3);
-      gctx.fillStyle = '#7ad24a'; gctx.fillRect(x-9, y-14, hpf, 3);
+      // hp bar (use server-broadcast maxHp for accurate scaling)
+      const maxHp = tu.maxHp || 25;
+      const hpw = 22, hpf = Math.max(0, tu.hp / maxHp) * hpw;
+      gctx.fillStyle = '#000'; gctx.fillRect(x-11, y-16, hpw, 4);
+      gctx.fillStyle = '#7ad24a'; gctx.fillRect(x-11, y-16, hpf, 4);
     }
   }
 
@@ -1322,6 +1348,7 @@ const WALL_STYLES = {
   brick: { base: '#a33c20', light: '#d05a30', dark: '#5a1a10', label: 'TUGLA', swatch: '#c4502a' },
   mesh:  { base: '#5a4a30', light: '#8a7050', dark: '#2a2018', label: 'TEL',  swatch: '#a08050' },
   tree:  { base: '#2a5a20', light: '#4a8a30', dark: '#1a3a14', label: 'AGAC', swatch: '#2a7a30' },
+  water: { base: '#2a6a9a', light: '#4aa0d0', dark: '#1a4060', label: 'SU',   swatch: '#3a8ac0' },
 };
 // Available ground (grass/dirt) colors for the editor + custom maps
 const GROUND_COLORS = [
@@ -1445,14 +1472,21 @@ function drawEditor() {
   for (let y = 0; y < EDITOR.gridH; y++) for (let x = 0; x < EDITOR.gridW; x++) {
     const kind = EDITOR.grid[y][x];
     if (!kind) continue;
-    if (kind === 'tree') {
-      drawTree(ctx, x*cs, y*cs, cs, cs);
-      continue;
-    }
+    if (kind === 'tree') { drawTree(ctx, x*cs, y*cs, cs, cs); continue; }
+    if (kind === 'water') { drawWater(ctx, x*cs, y*cs, cs, cs); continue; }
     const s = WALL_STYLES[kind] || WALL_STYLES.stone;
-    ctx.fillStyle = s.base;  ctx.fillRect(x*cs, y*cs, cs, cs);
-    ctx.fillStyle = s.light; ctx.fillRect(x*cs, y*cs, cs, 2);
-    ctx.fillStyle = s.dark;  ctx.fillRect(x*cs, y*cs+cs-2, cs, 2);
+    const tex = TEXTURES[kind];
+    if (tex && tex.pattern) {
+      ctx.save();
+      ctx.translate(x*cs, y*cs);
+      ctx.fillStyle = tex.pattern;
+      ctx.fillRect(0, 0, cs, cs);
+      ctx.restore();
+    } else {
+      ctx.fillStyle = s.base;  ctx.fillRect(x*cs, y*cs, cs, cs);
+      ctx.fillStyle = s.light; ctx.fillRect(x*cs, y*cs, cs, 2);
+      ctx.fillStyle = s.dark;  ctx.fillRect(x*cs, y*cs+cs-2, cs, 2);
+    }
   }
 }
 
@@ -1518,7 +1552,7 @@ function renderBrushPicker() {
   const root = $('brushPicker');
   if (!root) return;
   root.innerHTML = '';
-  for (const kind of ['stone','wood','brick','mesh','tree','erase']) {
+  for (const kind of ['stone','wood','brick','mesh','tree','water','erase']) {
     const b = document.createElement('button');
     b.className = 'pixel-btn small brush-btn';
     if (kind === 'erase') {
