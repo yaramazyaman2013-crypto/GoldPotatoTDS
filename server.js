@@ -978,8 +978,8 @@ io.on('connection', (socket) => {
     if (cfg && typeof cfg === 'object') {
       const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, Number(v) || 0));
       const nextCfg = {
-        ox: clamp(cfg.ox, -2, 2),
-        oy: clamp(cfg.oy, -3, 1),
+        ox: clamp(cfg.ox, -1.1, 1.1),
+        oy: clamp(cfg.oy, -2.0, 0.6),
         scale: clamp(cfg.scale, 0.3, 4),
       };
       onlyCfg = p.hat === safe && !!p.hatCfg;

@@ -595,13 +595,14 @@ drawShirt($('shirtIcon').getContext('2d'));
     dragStart = { ...localCoords(e), cfg: { ...getHatCfg(state.hat) } };
     e.preventDefault();
   });
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   window.addEventListener('mousemove', e => {
     if (!dragging) return;
     const { mx, my } = localCoords(e);
     const cfg = {
       ...dragStart.cfg,
-      ox: dragStart.cfg.ox + (mx - dragStart.mx) / PR,
-      oy: dragStart.cfg.oy + (my - dragStart.my) / PR,
+      ox: clamp(dragStart.cfg.ox + (mx - dragStart.mx) / PR, -1.1, 1.1),
+      oy: clamp(dragStart.cfg.oy + (my - dragStart.my) / PR, -2.0, 0.6),
     };
     setHatCfg(state.hat, cfg);
     renderPreview();
