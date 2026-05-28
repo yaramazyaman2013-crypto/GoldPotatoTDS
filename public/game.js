@@ -248,7 +248,7 @@ const CLASS_INFO = {
   engineer: { label: 'MUHENDIS', desc: '70sn: Taret koy (B)<br>25 mermi, 4.5sn reload',   color: '#4a8aff' },
   medic:    { label: 'DOKTOR',   desc: '65sn: Pet (V, 10sn ömür)<br>2.5dk: +1 can',       color: '#7ad24a' },
   tank:     { label: 'TANK',     desc: '3 kill: 30sn tank modu<br>25 HP, büyük, x2 hasar',color: '#ff5577' },
-  pyro:     { label: 'PYRO',     desc: 'Alev silahı<br>Yakın mesafe, sürekli hasar',       color: '#ff7a1a' },
+  pyro:     { label: 'PYRO',     desc: 'Alev silahı (50 yakıt)<br>Yakın mesafe, 2sn dolum', color: '#ff7a1a' },
 };
 
 // ===== Robot pixel art =====
@@ -1164,10 +1164,10 @@ function renderHUD() {
   // ammo (bullets) — rockets shown separately (right click)
   if (me) {
     if (me.cls === 'pyro') {
-      $('ammoCur').textContent = '🔥';
+      $('ammoCur').textContent = me.reloading ? '...' : '🔥' + me.ammo;
       const maxEl = $('ammo').querySelector('.max');
-      if (maxEl) maxEl.textContent = '';
-      $('ammo').classList.remove('reloading');
+      if (maxEl) maxEl.textContent = '/' + (me.maxAmmo || 50);
+      $('ammo').classList.toggle('reloading', !!me.reloading);
     } else {
       $('ammoCur').textContent = me.reloading ? '...' : me.ammo;
       const maxEl = $('ammo').querySelector('.max');

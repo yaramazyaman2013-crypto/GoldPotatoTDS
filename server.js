@@ -74,6 +74,8 @@ const C = {
   PYRO_FLAME_SPEED: 14,
   PYRO_FLAME_LIFE: 8,            // ~8 ticks * 14 speed = ~112px range (very short)
   PYRO_FLAME_DMG: 1,
+  PYRO_FUEL_MAX: 50,             // max fuel shots
+  PYRO_REFUEL_MS: 2000,          // refuel time when empty
   // Soda pickup (rare, +3 HP)
   SODA_SPAWN_MS:   45 * 1000,
   MAX_SODAS:       2,
@@ -331,7 +333,7 @@ function addPlayer(room, id, name, color, cls) {
     x: s.x, y: s.y, angle: 0,
     hp: C.HP_PER_LIFE, lives: C.START_LIVES,
     alive: true,
-    ammo: C.MAG_SIZE, reloading: false, reloadEndsAt: 0,
+    ammo: cls === 'pyro' ? C.PYRO_FUEL_MAX : C.MAG_SIZE, reloading: false, reloadEndsAt: 0,
     rockets: 0,
     kills: 0,
     keys: {w:false,a:false,s:false,d:false},
@@ -453,7 +455,7 @@ function startRound(room) {
     p.x = s.x; p.y = s.y;
     p.hp = C.HP_PER_LIFE; p.lives = C.START_LIVES;
     p.alive = true; p.kills = 0; p.angle = 0; p.fireCd = 0;
-    p.ammo = C.MAG_SIZE; p.reloading = false; p.reloadEndsAt = 0;
+    p.ammo = p.cls === 'pyro' ? C.PYRO_FUEL_MAX : C.MAG_SIZE; p.reloading = false; p.reloadEndsAt = 0;
     p.rockets = (p.cls === 'cyber') ? C.CYBER_START_ROCKETS : 0;
     p.lastCyberRocketAt = now;
     p.turretReadyAt = now;
@@ -549,7 +551,8 @@ function tick(room) {
     }
     p.fireCd -= C.TICK_MS;
     if (p.reloading && now >= p.reloadEndsAt) {
-      p.reloading = false; p.ammo = C.MAG_SIZE;
+      p.reloading = false;
+      p.ammo = p.cls === 'pyro' ? C.PYRO_FUEL_MAX : C.MAG_SIZE;
     }
 
     // Right click = rocket (if available)
@@ -566,8 +569,9 @@ function tick(room) {
     }
     // Left click = bullet (pyro uses flame instead)
     if (p.leftDown && p.fireCd <= 0 && !p.reloading) {
-      if (p.cls === 'pyro') {
+      if (p.cls === 'pyro' && p.ammo > 0) {
         p.fireCd = C.PYRO_FLAME_CD;
+        p.ammo--;
         const m = 20;
         room.bullets.push({
           id: room.nextBulletId++, owner: p.id, type: 'flame', dmg: C.PYRO_FLAME_DMG,
@@ -575,6 +579,7 @@ function tick(room) {
           vx: Math.cos(p.angle)*C.PYRO_FLAME_SPEED, vy: Math.sin(p.angle)*C.PYRO_FLAME_SPEED,
           life: C.PYRO_FLAME_LIFE,
         });
+        if (p.ammo === 0) { p.reloading = true; p.reloadEndsAt = now + C.PYRO_REFUEL_MS; }
       } else if (p.ammo > 0) {
         p.fireCd = isTank ? Math.floor(C.FIRE_COOLDOWN * 0.6) : C.FIRE_COOLDOWN;
         p.ammo--;
@@ -820,7 +825,7 @@ function tick(room) {
         id:p.id, name:p.name, color:p.color, cls:p.cls, hat:p.hat, hatCfg:p.hatCfg,
         x:p.x, y:p.y, angle:p.angle,
         hp:p.hp, lives:p.lives, maxHp: (now < p.tankUntil ? C.TANK_HP_BOOST : C.HP_PER_LIFE),
-        ammo:p.ammo, maxAmmo:C.MAG_SIZE,
+        ammo:p.ammo, maxAmmo: p.cls === 'pyro' ? C.PYRO_FUEL_MAX : C.MAG_SIZE,
         reloading:p.reloading, reloadEndsAt:p.reloadEndsAt,
         rockets:p.rockets,
         tank: now < p.tankUntil, tankUntil: p.tankUntil, tankKills: p.tankKills,
@@ -1008,7 +1013,8 @@ io.on('connection', (socket) => {
     const room = code && rooms.get(code);
     if (!room) return;
     const p = room.players.get(socket.id);
-    if (!p || !p.alive || p.reloading || p.ammo === C.MAG_SIZE) return;
+    const maxA = p.cls === 'pyro' ? C.PYRO_FUEL_MAX : C.MAG_SIZE;
+    if (!p || !p.alive || p.reloading || p.ammo === maxA || p.cls === 'pyro') return;
     p.reloading = true;
     p.reloadEndsAt = Date.now() + C.RELOAD_MS;
   });
