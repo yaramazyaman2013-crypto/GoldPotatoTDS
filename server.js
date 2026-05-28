@@ -48,7 +48,7 @@ const C = {
   ROCKET_FIRE_COOLDOWN: 320,
   ROCKET_AOE_R: 70,
   // Classes
-  CYBER_ROCKET_INTERVAL: 150 * 1000,
+  CYBER_ROCKET_INTERVAL: 50 * 1000,
   ENGINEER_TURRET_CD:    180 * 1000,
   MEDIC_PET_CD:          210 * 1000,
   TANK_KILLS_REQUIRED:   5,
@@ -445,7 +445,7 @@ function tick(room) {
 
     // Class passive: Cyber auto-rockets
     if (p.cls === 'cyber' && now - p.lastCyberRocketAt >= C.CYBER_ROCKET_INTERVAL) {
-      p.rockets += 1;
+      p.rockets += 3;
       p.lastCyberRocketAt = now;
     }
     // Tank mode expiry
