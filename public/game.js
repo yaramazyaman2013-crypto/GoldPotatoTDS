@@ -320,46 +320,41 @@ function getRobotBody(color) {
 const _gunImg = new Image();
 _gunImg.src = 'gun.png';
 
-// Per-player roll state: tracks last position to derive movement and rolling angle
+// Per-player roll state: tracks world position for smooth velocity
 const _rollState = new Map();
-function updateRoll(id, x, y) {
+function updateRoll(id, wx, wy) {
   let s = _rollState.get(id);
   const now = Date.now();
-  if (!s) { s = { x, y, lastT: now, vx: 0, vy: 0, roll: 0 }; _rollState.set(id, s); return s; }
+  if (!s) { s = { x: wx, y: wy, lastT: now, vx: 0, vy: 0 }; _rollState.set(id, s); return s; }
   const dt = Math.max(1, now - s.lastT);
-  // smoothed velocity
-  const vx = (x - s.x) / dt * 16, vy = (y - s.y) / dt * 16;
-  s.vx = s.vx * 0.6 + vx * 0.4;
-  s.vy = s.vy * 0.6 + vy * 0.4;
-  const speed = Math.hypot(s.vx, s.vy);
-  // roll advances by distance moved (per pixel)
-  const dist = Math.hypot(x - s.x, y - s.y);
-  s.roll += dist * 0.05;
-  s.x = x; s.y = y; s.lastT = now; s.speed = speed;
+  const rvx = (wx - s.x) / dt * 16, rvy = (wy - s.y) / dt * 16;
+  s.vx = s.vx * 0.7 + rvx * 0.3;
+  s.vy = s.vy * 0.7 + rvy * 0.3;
+  s.x = wx; s.y = wy; s.lastT = now;
+  s.speed = Math.hypot(s.vx, s.vy);
   return s;
 }
 
-function drawRobotTopDown(ctx, x, y, color, angle, alive=true, id=null) {
+function drawRobotTopDown(ctx, x, y, color, angle, alive=true, id=null, wx=0, wy=0) {
   ctx.save();
-  ctx.translate(Math.floor(x), Math.floor(y));
+  ctx.translate(x, y);
   if (!alive) ctx.globalAlpha = 0.35;
-  // Rolling animation: tilt body in movement direction + bob/squash
-  const rs = id ? updateRoll(id, x, y) : null;
-  if (rs && rs.speed > 0.2 && alive) {
+  // Rolling animation: smooth time-based wobble when moving
+  const rs = id ? updateRoll(id, wx, wy) : null;
+  if (rs && rs.speed > 0.5 && alive) {
+    const now = Date.now();
+    // Lean forward in movement direction
     const moveAng = Math.atan2(rs.vy, rs.vx);
-    // Tumble side-to-side (perpendicular to movement) like a rolling blob
-    const tilt = Math.sin(rs.roll * Math.PI) * 0.25;
-    const bob = Math.abs(Math.sin(rs.roll * Math.PI * 2)) * 1.6;
-    ctx.save();
-    ctx.rotate(moveAng + Math.PI/2);   // align tilt axis with movement
-    ctx.rotate(tilt);
-    ctx.rotate(-moveAng - Math.PI/2);
+    const lean = 0.12;  // gentle lean forward
+    // Side-to-side wobble perpendicular to movement
+    const wobble = Math.sin(now / 100) * 0.08;
+    const bob = Math.abs(Math.sin(now / 100)) * 1.5;
+    ctx.rotate(moveAng);
+    ctx.rotate(lean + wobble);
+    ctx.rotate(-moveAng);
     ctx.translate(0, -bob);
-    ctx.drawImage(getRobotBody(color), -_ROBOT_CX, -_ROBOT_CY);
-    ctx.restore();
-  } else {
-    ctx.drawImage(getRobotBody(color), -_ROBOT_CX, -_ROBOT_CY);
   }
+  ctx.drawImage(getRobotBody(color), -_ROBOT_CX, -_ROBOT_CY);
   // draw weapon on top of character, rotated toward cursor
   if (_gunImg.complete && _gunImg.naturalWidth > 0) {
     ctx.save();
@@ -1410,7 +1405,7 @@ function render() {
       gctx.fillStyle = `rgba(255,80,90,${pulse*0.35})`;
       gctx.beginPath(); gctx.arc(p.x-camX, p.y-camY, 28, 0, Math.PI*2); gctx.fill();
     }
-    drawRobotTopDown(gctx, p.x-camX, p.y-camY, p.color, p.angle, p.alive, p.id);
+    drawRobotTopDown(gctx, p.x-camX, p.y-camY, p.color, p.angle, p.alive, p.id, p.x, p.y);
     gctx.fillStyle='#000'; gctx.fillRect(p.x-camX-30, p.y-camY-30, 60, 12);
     gctx.fillStyle = p.id===socket.id ? '#ffd24a' : '#fff';
     gctx.font='10px "Press Start 2P",monospace'; gctx.textAlign='center';
