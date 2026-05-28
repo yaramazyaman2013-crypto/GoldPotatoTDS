@@ -1630,32 +1630,42 @@ function render() {
     else if (b.type === 'flame') {
       const seed = (b.id || 0) * 1.618;
       const t = Date.now() * 0.001;
-      // fast flicker per bullet — stable seed keeps bullets visually distinct
-      const f1 = Math.sin(t * 14 + seed) * 0.5 + 0.5;
-      const f2 = Math.sin(t * 20 + seed * 1.4) * 0.5 + 0.5;
-      const f3 = Math.sin(t * 9  + seed * 0.7) * 0.5 + 0.5;
       const ang = b.angle || 0;
       gctx.save();
       gctx.translate(x, y);
       gctx.rotate(ang);
-      // elongate in direction of travel so it looks like a streak
-      gctx.scale(1.6, 1.0);
-      // outer glow
-      gctx.globalAlpha = 0.18 + f3 * 0.12;
-      gctx.fillStyle = '#ff3300';
-      gctx.beginPath(); gctx.arc(0, 0, 11 + f1 * 5, 0, Math.PI*2); gctx.fill();
-      // flame body
-      gctx.globalAlpha = 0.7 + f2 * 0.25;
-      gctx.fillStyle = `rgb(255,${Math.floor(60 + f1 * 130)},0)`;
-      gctx.beginPath(); gctx.arc(0, 0, 6 + f1 * 3, 0, Math.PI*2); gctx.fill();
-      // hot inner core
-      gctx.globalAlpha = 0.95;
-      gctx.fillStyle = `rgb(255,${Math.floor(210 + f2 * 45)},${Math.floor(f3 * 60)})`;
-      gctx.beginPath(); gctx.arc(0, 0, 2.5 + f3, 0, Math.PI*2); gctx.fill();
-      // white-hot tip
-      gctx.globalAlpha = 0.8;
-      gctx.fillStyle = '#fff';
-      gctx.beginPath(); gctx.arc(0, 0, 1.2, 0, Math.PI*2); gctx.fill();
+      // a chunk of fire = multiple offset blobs, each with own flicker
+      const blobs = [
+        { ox: -6, oy: -3, r: 6.5, freq: 11, ph: 0.3 },
+        { ox: -2, oy:  3, r: 7.5, freq: 13, ph: 1.1 },
+        { ox:  3, oy: -2, r: 6.0, freq: 17, ph: 2.4 },
+        { ox:  5, oy:  3, r: 5.0, freq: 19, ph: 0.7 },
+        { ox:  0, oy:  0, r: 8.0, freq:  9, ph: 1.8 },
+      ];
+      // outer red glow (one big soft puff)
+      const gflick = Math.sin(t * 8 + seed) * 0.5 + 0.5;
+      gctx.globalAlpha = 0.22 + gflick * 0.13;
+      gctx.fillStyle = '#ff2a00';
+      gctx.beginPath(); gctx.arc(0, 0, 16 + gflick * 4, 0, Math.PI*2); gctx.fill();
+      // orange flame body — multiple blobs
+      gctx.globalAlpha = 0.75;
+      for (const bl of blobs) {
+        const f = Math.sin(t * bl.freq + seed + bl.ph) * 0.5 + 0.5;
+        gctx.fillStyle = `rgb(255,${Math.floor(70 + f * 110)},0)`;
+        gctx.beginPath(); gctx.arc(bl.ox, bl.oy, bl.r + f * 2.5, 0, Math.PI*2); gctx.fill();
+      }
+      // hot yellow inner blobs
+      gctx.globalAlpha = 0.9;
+      for (let i = 0; i < 3; i++) {
+        const f = Math.sin(t * (14 + i*3) + seed + i) * 0.5 + 0.5;
+        const ox = (i - 1) * 3;
+        gctx.fillStyle = `rgb(255,${Math.floor(200 + f * 50)},${Math.floor(f * 70)})`;
+        gctx.beginPath(); gctx.arc(ox, (f - 0.5) * 2, 2.5 + f * 1.5, 0, Math.PI*2); gctx.fill();
+      }
+      // white-hot core
+      gctx.globalAlpha = 0.85;
+      gctx.fillStyle = '#ffeebb';
+      gctx.beginPath(); gctx.arc(0, 0, 2 + gflick, 0, Math.PI*2); gctx.fill();
       gctx.globalAlpha = 1;
       gctx.restore();
     } else {

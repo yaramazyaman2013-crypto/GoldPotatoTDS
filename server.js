@@ -70,11 +70,10 @@ const C = {
   TANK_DURATION:         30 * 1000,
   TANK_HP_BOOST:         25,
   // Pyro flame weapon
-  PYRO_FLAME_CD: 130,            // ms between flame shots
-  PYRO_FLAME_SPEED: 14,
-  PYRO_FLAME_LIFE: 14,           // ~14 ticks * 14 speed = ~196px range
-  PYRO_FLAME_DMG: 0.5,           // per particle (3 particles per shot)
-  PYRO_FLAME_SPREAD: 0.22,       // cone half-angle in radians (~12.6°)
+  PYRO_FLAME_CD: 90,             // ms between flame chunks
+  PYRO_FLAME_SPEED: 13,
+  PYRO_FLAME_LIFE: 16,           // ~16 ticks * 13 speed = ~208px range
+  PYRO_FLAME_DMG: 0.5,
   PYRO_FUEL_MAX: 50,             // max fuel shots
   PYRO_REFUEL_MS: 2000,          // refuel time when empty
   // Soda pickup (rare, +3 HP)
@@ -574,16 +573,12 @@ function tick(room) {
         p.fireCd = C.PYRO_FLAME_CD;
         p.ammo--;
         const m = 20;
-        // 3-particle spread cone
-        for (let si = -1; si <= 1; si++) {
-          const a = p.angle + si * C.PYRO_FLAME_SPREAD;
-          room.bullets.push({
-            id: room.nextBulletId++, owner: p.id, type: 'flame', dmg: C.PYRO_FLAME_DMG,
-            x: p.x+Math.cos(p.angle)*m, y: p.y+Math.sin(p.angle)*m,
-            vx: Math.cos(a)*C.PYRO_FLAME_SPEED, vy: Math.sin(a)*C.PYRO_FLAME_SPEED,
-            angle: a, life: C.PYRO_FLAME_LIFE,
-          });
-        }
+        room.bullets.push({
+          id: room.nextBulletId++, owner: p.id, type: 'flame', dmg: C.PYRO_FLAME_DMG,
+          x: p.x+Math.cos(p.angle)*m, y: p.y+Math.sin(p.angle)*m,
+          vx: Math.cos(p.angle)*C.PYRO_FLAME_SPEED, vy: Math.sin(p.angle)*C.PYRO_FLAME_SPEED,
+          angle: p.angle, life: C.PYRO_FLAME_LIFE,
+        });
         if (p.ammo === 0) { p.reloading = true; p.reloadEndsAt = now + C.PYRO_REFUEL_MS; }
       } else if (p.ammo > 0) {
         p.fireCd = isTank ? Math.floor(C.FIRE_COOLDOWN * 0.6) : C.FIRE_COOLDOWN;
