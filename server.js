@@ -782,23 +782,15 @@ function tick(room) {
           applyDamage(p, 10, b.owner);
         }
       }
-      // splash damage to turrets
+      // splash damage to turrets (sabit ~%30 hasar, 3-4 roket dayanır)
       for (const tu of room.turrets) {
         const d2 = (tu.x-b.x)**2 + (tu.y-b.y)**2;
-        if (d2 < C.ROCKET_AOE_R**2) {
-          const dist = Math.sqrt(d2);
-          const dmg = dist < 30 ? C.TURRET_HP : Math.ceil(C.TURRET_HP * 0.6 * (1 - dist/C.ROCKET_AOE_R));
-          if (dmg > 0) tu.hp -= dmg;
-        }
+        if (d2 < C.ROCKET_AOE_R**2) tu.hp -= 12;
       }
       // splash damage to pets
       for (const pt of room.pets) {
         const d2 = (pt.x-b.x)**2 + (pt.y-b.y)**2;
-        if (d2 < C.ROCKET_AOE_R**2) {
-          const dist = Math.sqrt(d2);
-          const dmg = dist < 30 ? C.PET_HP : Math.ceil(C.PET_HP * 0.6 * (1 - dist/C.ROCKET_AOE_R));
-          if (dmg > 0) pt.hp -= dmg;
-        }
+        if (d2 < C.ROCKET_AOE_R**2) pt.hp -= 10;
       }
       room.bullets.splice(i, 1);
     }
