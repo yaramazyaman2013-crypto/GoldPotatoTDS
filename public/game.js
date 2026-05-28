@@ -645,32 +645,35 @@ const interpBuf = { prev: null, prevAt: 0, cur: null, curAt: 0 };
 // interpolation never fires → positions snap every server tick.
 const INTERP_BUFFER_MS = 40;
 
+// Mutates `cur` in place: writes interpolated x/y onto each player and
+// returns `cur` directly. Avoids per-frame allocation of a new snapshot
+// + per-player spread, which were causing GC pauses ("freeze") at 60fps.
+// The cur snapshot is only used by the renderer this frame, then the next
+// 'state' event replaces it entirely — mutation is safe.
 function getInterpState() {
   if (!interpBuf.cur) return state.serverState;
   if (!interpBuf.prev) return interpBuf.cur;
   const dt = interpBuf.curAt - interpBuf.prevAt;
   if (dt <= 0) return interpBuf.cur;
-  // renderTime is 40ms behind "now" so it falls between prev and cur
   const renderTime = performance.now() - INTERP_BUFFER_MS;
   const t = (renderTime - interpBuf.prevAt) / dt;
   if (t <= 0) return interpBuf.prev;
   if (t >= 1) return interpBuf.cur;
-  // Fast lookup map — avoids O(n²) find() per frame
   if (!interpBuf._prevMap) {
     interpBuf._prevMap = new Map();
     for (const p of interpBuf.prev.players) interpBuf._prevMap.set(p.id, p);
   }
   const prevMap = interpBuf._prevMap;
-  const players = interpBuf.cur.players.map(cp => {
+  const players = interpBuf.cur.players;
+  for (let i = 0; i < players.length; i++) {
+    const cp = players[i];
+    if (cp._baseX === undefined) { cp._baseX = cp.x; cp._baseY = cp.y; }
     const pp = prevMap.get(cp.id);
-    if (!pp || !pp.alive || !cp.alive) return cp;
-    return {
-      ...cp,
-      x: pp.x + (cp.x - pp.x) * t,
-      y: pp.y + (cp.y - pp.y) * t,
-    };
-  });
-  return { ...interpBuf.cur, players };
+    if (!pp || !pp.alive || !cp.alive) continue;
+    cp.x = pp.x + (cp._baseX - pp.x) * t;
+    cp.y = pp.y + (cp._baseY - pp.y) * t;
+  }
+  return interpBuf.cur;
 }
 
 let lastAmmo = null, wasReloading = false, lastRocketCount = 0;
@@ -1329,6 +1332,8 @@ function renderMapList() {
   if (!root) return;
   root.innerHTML = '';
   serverMaps.forEach(name => {
+    const wrap = document.createElement('span');
+    wrap.className = 'map-item';
     const b = document.createElement('button');
     b.className = 'pixel-btn small map-btn';
     b.textContent = name;
@@ -1337,7 +1342,29 @@ function renderMapList() {
       state.mapName = name;
       renderMapList();
     });
-    root.appendChild(b);
+    wrap.appendChild(b);
+    // Per-map delete (default is protected)
+    if (name !== 'default') {
+      const x = document.createElement('button');
+      x.className = 'pixel-btn small map-del';
+      x.textContent = '×';
+      x.title = 'Haritayı sil';
+      x.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!requireMapPassword()) return;
+        if (!confirm(name + ' haritasını silmek istediğine emin misin?')) return;
+        try {
+          await sbDeleteMap(name);
+          if (state.mapName === name) state.mapName = 'default';
+          socket.emit('mapDeleted', { name });
+          await refreshMapsFromSupabase();
+        } catch (err) {
+          alert('Silinemedi: ' + err.message);
+        }
+      });
+      wrap.appendChild(x);
+    }
+    root.appendChild(wrap);
   });
 }
 
