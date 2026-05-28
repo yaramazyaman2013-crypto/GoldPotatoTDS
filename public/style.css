@@ -250,6 +250,17 @@ canvas { image-rendering: pixelated; display: block; }
   background: linear-gradient(to right, #ff3050, #ff6080);
   transition: width 0.15s;
 }
+.hpbar { position: absolute; }
+.hptext {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-family: "Press Start 2P", monospace;
+  font-size: 11px;
+  color: #fff;
+  text-shadow: 1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000;
+  pointer-events: none;
+}
 .ammo {
   position: absolute;
   bottom: 24px; right: 24px;
