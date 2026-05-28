@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <title>Gold Wave</title>
-<link rel="stylesheet" href="style.css?v=hatrot1" />
+<link rel="stylesheet" href="style.css?v=music1" />
 </head>
 <body>
 <!-- MAIN MENU -->
@@ -90,6 +90,7 @@
   <div class="panel">
     <h2 class="title-sm" data-i18n="settingsTitle">AYARLAR</h2>
     <label><span data-i18n="volume">Ses</span><input id="setVolume" type="range" min="0" max="100" value="50"/></label>
+    <label><span>Müzik</span><input id="setMusicVolume" type="range" min="0" max="100" value="25"/></label>
     <button id="btnMute" class="pixel-btn small">🎵 ACIK</button>
     <label><span data-i18n="crosshair">Crosshair</span><input id="setCross" type="checkbox" checked/></label>
     <div class="lang-row">
@@ -126,6 +127,7 @@
     <div class="panel">
       <h2 class="title-sm" data-i18n="settingsTitle">AYARLAR</h2>
       <label><span data-i18n="volume">Ses</span><input id="pauseVolume" type="range" min="0" max="100" value="50"/></label>
+      <label><span>Müzik</span><input id="pauseMusicVolume" type="range" min="0" max="100" value="25"/></label>
       <button id="pauseMute" class="pixel-btn small">🎵 ACIK</button>
       <div class="lang-row">
         <span data-i18n="language">Dil</span>
@@ -142,6 +144,6 @@
 <audio id="bgMusic" src="music.mp3" loop preload="auto" style="display:none"></audio>
 <script src="supabase-config.js"></script>
 <script src="/socket.io/socket.io.js"></script>
-<script src="game.js?v=hatrot1"></script>
+<script src="game.js?v=music1"></script>
 </body>
 </html>

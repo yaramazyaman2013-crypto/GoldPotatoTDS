@@ -932,13 +932,28 @@ function computeAngle() {
 
 function syncVolume(v) {
   AUD.setVolume(v);
+  localStorage.setItem('gwVol', String(v));
   $('setVolume').value = Math.round(v * 100);
   $('pauseVolume').value = Math.round(v * 100);
-  // Music volume: 25% of master so it stays as background
-  if (bgMusic) bgMusic.volume = Math.max(0, Math.min(1, v * 0.25));
+}
+function syncMusicVolume(v) {
+  v = Math.max(0, Math.min(1, v));
+  localStorage.setItem('gwMusicVol', String(v));
+  if (bgMusic) bgMusic.volume = v;
+  $('setMusicVolume').value = Math.round(v * 100);
+  $('pauseMusicVolume').value = Math.round(v * 100);
 }
 $('setVolume').addEventListener('input', (e) => syncVolume(parseInt(e.target.value,10)/100));
 $('pauseVolume').addEventListener('input', (e) => syncVolume(parseInt(e.target.value,10)/100));
+$('setMusicVolume').addEventListener('input', (e) => syncMusicVolume(parseInt(e.target.value,10)/100));
+$('pauseMusicVolume').addEventListener('input', (e) => syncMusicVolume(parseInt(e.target.value,10)/100));
+// Restore saved
+(function () {
+  const v = parseFloat(localStorage.getItem('gwVol'));
+  if (!isNaN(v)) syncVolume(v);
+  const mv = parseFloat(localStorage.getItem('gwMusicVol'));
+  syncMusicVolume(isNaN(mv) ? 0.25 : mv);
+})();
 
 // Music mute toggle (saved across sessions)
 function applyMute(m) {
