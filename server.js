@@ -81,7 +81,7 @@ const C = {
   TURRET_BULLET_DMG: 2,
   TURRET_BULLET_SPEED: 12,
   // Pet
-  PET_HP: 25,
+  PET_HP: 30,
   // Pet (heal totem)
   PET_DURATION: 60 * 1000,
   PET_HEAL_R: 35,
