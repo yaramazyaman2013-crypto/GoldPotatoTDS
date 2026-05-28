@@ -216,7 +216,7 @@ const state = {
 };
 
 const CLASS_INFO = {
-  cyber:    { label: 'CYBER',    desc: 'Her 55sn +1 füze',          color: '#7afcff' },
+  cyber:    { label: 'CYBER',    desc: 'Her 50sn +3 füze',          color: '#7afcff' },
   engineer: { label: 'MUHENDIS', desc: '3dk: Taret koy (B tuşu)',    color: '#4a8aff' },
   medic:    { label: 'DOKTOR',   desc: '3.5dk: Heal pet (V tuşu)',   color: '#7ad24a' },
   tank:     { label: 'TANK',     desc: '5 kill → 20sn tank modu',    color: '#ff5577' },
@@ -770,7 +770,7 @@ function renderHUD() {
       ready = rem === 0; action = 'placePet';
       label = ready ? 'PET KOY (V)' : 'PET ' + Math.ceil(rem/1000) + 's';
     } else if (me.cls === 'cyber') {
-      const rem = Math.max(0, 55000 - (now - (state.cyberAnchor||now)));
+      const rem = Math.max(0, 50000 - (now - (state.cyberAnchor||now)));
       label = 'FUZE ' + Math.ceil(rem/1000) + 's';
     } else if (me.cls === 'tank') {
       label = me.tank ? 'TANK ' + Math.ceil((me.tankUntil-now)/1000) + 's' : 'KILLS ' + (me.tankKills||0) + '/5';
