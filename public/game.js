@@ -321,6 +321,20 @@ function getRobotBody(color, withAntenna = true) {
   return cv;
 }
 
+// Pyro fire sound — loops while firing, stops ~300ms after last shot
+let _pyroFireAudio = null;
+let _pyroFireStopId = null;
+function _pyroFireTrigger() {
+  if (!_pyroFireAudio) {
+    _pyroFireAudio = new Audio('fire.mp3');
+    _pyroFireAudio.loop = true;
+  }
+  _pyroFireAudio.volume = Math.min(1, (AUD.volume || 0.5) * 0.75);
+  if (_pyroFireAudio.paused) _pyroFireAudio.play().catch(() => {});
+  clearTimeout(_pyroFireStopId);
+  _pyroFireStopId = setTimeout(() => { if (_pyroFireAudio) _pyroFireAudio.pause(); }, 320);
+}
+
 const _gunImg = new Image();
 _gunImg.src = 'gun.png';
 const _flameImg = new Image();
@@ -1109,8 +1123,12 @@ socket.on('state', (s) => {
     if (state.cls === 'cyber' && me.rockets > lastRocketCount) state.cyberAnchor = Date.now();
     lastRocketCount = me.rockets;
     if (lastAmmo !== null && me.ammo < lastAmmo) {
-      const shots = lastAmmo - me.ammo;
-      for (let i = 0; i < shots; i++) AUD.shoot();
+      if (me.cls === 'pyro') {
+        _pyroFireTrigger();
+      } else {
+        const shots = lastAmmo - me.ammo;
+        for (let i = 0; i < shots; i++) AUD.shoot();
+      }
     }
     if (me.reloading && !wasReloading) AUD.reload();
     lastAmmo = me.ammo; wasReloading = me.reloading;
