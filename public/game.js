@@ -247,7 +247,7 @@ const CLASS_INFO = {
   cyber:    { label: 'CYBER',    desc: '1 füze ile başlar, her 50sn +2 füze',     color: '#7afcff' },
   engineer: { label: 'MUHENDIS', desc: '70sn: Taret (B) • 35 mermi, 3sn reload', color: '#4a8aff' },
   medic:    { label: 'DOKTOR',   desc: '65sn: Heal pet (V) • 2.5dk +1 can',      color: '#7ad24a' },
-  tank:     { label: 'TANK',     desc: '3 kill → 30sn tank modu (20 HP)',        color: '#ff5577' },
+  tank:     { label: 'TANK',     desc: '3 kill → 30sn tank modu (25 HP, büyük)', color: '#ff5577' },
 };
 
 // ===== Robot pixel art =====
@@ -1677,9 +1677,17 @@ function render() {
     if (px < -40 || py < -40 || px > W+40 || py > H+40) continue;
     if (p.tank) {
       gctx.fillStyle = `rgba(255,80,90,${tankAlpha})`;
-      gctx.beginPath(); gctx.arc(px, py, 28, 0, Math.PI*2); gctx.fill();
+      gctx.beginPath(); gctx.arc(px, py, 36, 0, Math.PI*2); gctx.fill();
     }
-    drawRobotTopDown(gctx, px, py, p.color, p.angle, p.alive, p.id, p.x, p.y, p.hat||'', p.hatCfg);
+    if (p.tank) {
+      gctx.save();
+      gctx.translate(px, py);
+      gctx.scale(1.5, 1.5);
+      drawRobotTopDown(gctx, 0, 0, p.color, p.angle, p.alive, p.id, p.x, p.y, p.hat||'', p.hatCfg);
+      gctx.restore();
+    } else {
+      drawRobotTopDown(gctx, px, py, p.color, p.angle, p.alive, p.id, p.x, p.y, p.hat||'', p.hatCfg);
+    }
     // life pips — cached offscreen canvas avoids 130+ fillRect per player/frame
     const lives = typeof p.lives==='number' ? p.lives : 0;
     const totalW = 5*10 + 4*3;
