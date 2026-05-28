@@ -62,13 +62,13 @@ const C = {
   SODA_HEAL:       3,
   SODA_SPAWN_CHANCE: 0.35,
   // Turret
-  TURRET_HP: 35,
+  TURRET_HP: 40,
   TURRET_MOVE_SPEED: 3.2, // px per tick (~128 px/sec at 40Hz) — visibly walking
   TURRET_RANGE: 280,
   TURRET_FIRE_CD: 120,           // rapid fire between shots
   TURRET_MAG_SIZE: 40,           // shots before reload
   TURRET_RELOAD_MS: 2000,        // 2sn reload
-  TURRET_BULLET_DMG: 1,
+  TURRET_BULLET_DMG: 2,
   TURRET_BULLET_SPEED: 12,
   // Pet
   PET_HP: 25,
