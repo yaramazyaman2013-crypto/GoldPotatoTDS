@@ -131,6 +131,18 @@ canvas { image-rendering: pixelated; display: block; }
   image-rendering: pixelated;
 }
 .palette canvas.selected { border-color: #ffd24a; }
+.hat-btn { font-size: 28px; line-height: 1; }
+.hat-palette { right: 90px; }
+.hat-palette canvas { width: 64px; height: 64px; background: #1a1428; }
+.hat-palette .none-opt {
+  width: 64px; height: 64px; cursor: pointer;
+  border: 2px solid transparent;
+  background: #1a1428;
+  color: #ffd24a;
+  display: flex; align-items: center; justify-content: center;
+  font-family: "Press Start 2P", monospace; font-size: 10px;
+}
+.hat-palette .none-opt.selected { border-color: #ffd24a; }
 
 /* PANELS */
 .panel {
