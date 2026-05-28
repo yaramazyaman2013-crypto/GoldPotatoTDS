@@ -524,7 +524,10 @@ function tick(room) {
   // Turrets: walk toward target point if relocating, then target/fire.
   for (let ti = room.turrets.length-1; ti >= 0; ti--) {
     const t = room.turrets[ti];
-    if (t.hp <= 0) { room.turrets.splice(ti, 1); continue; }
+    if (t.hp <= 0) {
+      io.to(room.code).emit('explosion', {x: t.x, y: t.y, r: 32});
+      room.turrets.splice(ti, 1); continue;
+    }
     if (t.targetX !== undefined) {
       const dx = t.targetX - t.x, dy = t.targetY - t.y;
       const dist = Math.hypot(dx, dy);
