@@ -21,6 +21,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // List available hats — any .png in public/hats/
 app.get('/api/hats', (req, res) => {
+  res.set('Cache-Control', 'no-store');
   const dir = path.join(__dirname, 'public', 'hats');
   fs.readdir(dir, (err, files) => {
     if (err) return res.json([]);

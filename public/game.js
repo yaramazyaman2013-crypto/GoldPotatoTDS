@@ -693,7 +693,7 @@ function loadHats() {
     if (state.roomId) socket.emit('setHat', { hat: '' });
   });
   hatPalette.appendChild(none);
-  fetch('/api/hats').then(r => r.json()).then(list => {
+  fetch('/api/hats?t=' + Date.now(), { cache: 'no-store' }).then(r => r.json()).then(list => {
     for (const name of list) hatPalette.appendChild(makeHatSwatch(name));
   }).catch(() => {});
 }
