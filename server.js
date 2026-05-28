@@ -48,17 +48,21 @@ const C = {
   ROCKET_FIRE_COOLDOWN: 320,
   ROCKET_AOE_R: 70,
   // Classes
-  CYBER_ROCKET_INTERVAL: 50 * 1000,
-  ENGINEER_TURRET_CD:    180 * 1000,
+  CYBER_ROCKET_INTERVAL: 30 * 1000,
+  ENGINEER_TURRET_CD:    90 * 1000,
   MEDIC_PET_CD:          210 * 1000,
-  TANK_KILLS_REQUIRED:   5,
+  TANK_KILLS_REQUIRED:   3,
   TANK_DURATION:         20 * 1000,
+  TANK_HP_BOOST:         20,
   // Turret
-  TURRET_HP: 20,
+  TURRET_HP: 35,
   TURRET_MOVE_SPEED: 3.2, // px per tick (~128 px/sec at 40Hz) — visibly walking
   TURRET_RANGE: 280,
-  TURRET_FIRE_CD: 600,
+  TURRET_FIRE_CD: 400,
+  TURRET_BULLET_DMG: 1,
   TURRET_BULLET_SPEED: 12,
+  // Pet
+  PET_HP: 25,
   // Pet (heal totem)
   PET_DURATION: 60 * 1000,
   PET_HEAL_R: 35,
@@ -542,6 +546,10 @@ function tick(room) {
   // Pets: heal nearby allies, expire after duration
   for (let pi = room.pets.length-1; pi >= 0; pi--) {
     const pet = room.pets[pi];
+    if (pet.hp <= 0) {
+      io.to(room.code).emit('explosion', {x: pet.x, y: pet.y, r: 28});
+      room.pets.splice(pi, 1); continue;
+    }
     if (now >= pet.expiresAt) { room.pets.splice(pi, 1); continue; }
     if (now - (pet.lastHealAt||0) >= C.PET_HEAL_EVERY) {
       pet.lastHealAt = now;
@@ -587,7 +595,7 @@ function tick(room) {
       if (now >= (t.nextFireAt || 0)) {
         t.nextFireAt = now + C.TURRET_FIRE_CD;
         room.bullets.push({
-          id: room.nextBulletId++, owner: t.owner, type: 'turret', dmg: 2,
+          id: room.nextBulletId++, owner: t.owner, type: 'turret', dmg: C.TURRET_BULLET_DMG,
           x: t.x + Math.cos(t.angle)*16, y: t.y + Math.sin(t.angle)*16,
           vx: Math.cos(t.angle)*C.TURRET_BULLET_SPEED,
           vy: Math.sin(t.angle)*C.TURRET_BULLET_SPEED,
@@ -610,7 +618,7 @@ function tick(room) {
           if (killer.tankKills >= C.TANK_KILLS_REQUIRED) {
             killer.tankKills = 0;
             killer.tankUntil = Date.now() + C.TANK_DURATION;
-            killer.hp = C.HP_PER_LIFE;
+            killer.hp = C.TANK_HP_BOOST;
             io.to(room.code).emit('tankMode', {id: killer.id, until: killer.tankUntil});
           }
         }
@@ -675,6 +683,21 @@ function tick(room) {
           }
         }
       }
+      // hit pets (skip own)
+      if (!detonated && !hitSomething) {
+        for (const pt of room.pets) {
+          if (pt.owner === b.owner) continue;
+          if ((pt.x-b.x)**2+(pt.y-b.y)**2 < (10 + r)**2) {
+            if (isRocket) { detonated = true; }
+            else {
+              pt.hp -= (b.dmg || 1);
+              room.bullets.splice(i,1);
+              hitSomething = true;
+            }
+            break;
+          }
+        }
+      }
       if (hitSomething) continue;
     }
 
@@ -701,7 +724,7 @@ function tick(room) {
       players: [...room.players.values()].map(p => ({
         id:p.id, name:p.name, color:p.color, cls:p.cls,
         x:p.x, y:p.y, angle:p.angle,
-        hp:p.hp, lives:p.lives, maxHp:C.HP_PER_LIFE,
+        hp:p.hp, lives:p.lives, maxHp: (now < p.tankUntil ? C.TANK_HP_BOOST : C.HP_PER_LIFE),
         ammo:p.ammo, maxAmmo:C.MAG_SIZE,
         reloading:p.reloading, reloadEndsAt:p.reloadEndsAt,
         rockets:p.rockets,
@@ -714,7 +737,7 @@ function tick(room) {
       hearts:  room.hearts.map(h=>({x:h.x, y:h.y})),
       rocketPickups: room.rocketPickups.map(r=>({x:r.x, y:r.y})),
       turrets: room.turrets.map(t=>({x:t.x, y:t.y, angle:t.angle||0, hp:t.hp, maxHp:C.TURRET_HP, owner:t.owner})),
-      pets:    room.pets.map(pt=>({x:pt.x, y:pt.y, expiresAt:pt.expiresAt, owner:pt.owner})),
+      pets:    room.pets.map(pt=>({x:pt.x, y:pt.y, hp:pt.hp, maxHp:C.PET_HP, expiresAt:pt.expiresAt, owner:pt.owner})),
     });
   }
   checkRoundOver(room);
@@ -829,6 +852,7 @@ io.on('connection', (socket) => {
     room.pets.push({
       id: room.nextPetId++,
       owner: p.id, x: p.x, y: p.y,
+      hp: C.PET_HP,
       expiresAt: Date.now() + C.PET_DURATION, lastHealAt: 0,
     });
     p.petReadyAt = Date.now() + C.MEDIC_PET_CD;

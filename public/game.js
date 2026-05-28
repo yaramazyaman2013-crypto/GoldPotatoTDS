@@ -216,10 +216,10 @@ const state = {
 };
 
 const CLASS_INFO = {
-  cyber:    { label: 'CYBER',    desc: 'Her 50sn +3 füze',          color: '#7afcff' },
-  engineer: { label: 'MUHENDIS', desc: '3dk: Taret koy (B tuşu)',    color: '#4a8aff' },
+  cyber:    { label: 'CYBER',    desc: 'Her 30sn +3 füze',          color: '#7afcff' },
+  engineer: { label: 'MUHENDIS', desc: '90sn: Taret koy (B tuşu)',   color: '#4a8aff' },
   medic:    { label: 'DOKTOR',   desc: '3.5dk: Heal pet (V tuşu)',   color: '#7ad24a' },
-  tank:     { label: 'TANK',     desc: '5 kill → 20sn tank modu',    color: '#ff5577' },
+  tank:     { label: 'TANK',     desc: '3 kill → 20sn tank modu',    color: '#ff5577' },
 };
 
 // ===== Robot pixel art =====
@@ -771,10 +771,10 @@ function renderHUD() {
       ready = rem === 0; action = 'placePet';
       label = ready ? 'PET KOY (V)' : 'PET ' + Math.ceil(rem/1000) + 's';
     } else if (me.cls === 'cyber') {
-      const rem = Math.max(0, 50000 - (now - (state.cyberAnchor||now)));
+      const rem = Math.max(0, 30000 - (now - (state.cyberAnchor||now)));
       label = 'FUZE ' + Math.ceil(rem/1000) + 's';
     } else if (me.cls === 'tank') {
-      label = me.tank ? 'TANK ' + Math.ceil((me.tankUntil-now)/1000) + 's' : 'KILLS ' + (me.tankKills||0) + '/5';
+      label = me.tank ? 'TANK ' + Math.ceil((me.tankUntil-now)/1000) + 's' : 'KILLS ' + (me.tankKills||0) + '/3';
     }
     if (label) {
       ab.textContent = label;
@@ -1145,6 +1145,12 @@ function render() {
       gctx.fillStyle = '#0a0a0a'; gctx.fillRect(x-8, y-8, 16, 16);
       gctx.fillStyle = '#7ad24a'; gctx.fillRect(x-6, y-6, 12, 12);
       gctx.fillStyle = '#fff'; gctx.fillRect(x-1, y-4, 2, 8); gctx.fillRect(x-4, y-1, 8, 2);
+      // hp bar
+      if (typeof pt.hp === 'number' && pt.maxHp) {
+        const hpw = 22, hpf = Math.max(0, pt.hp / pt.maxHp) * hpw;
+        gctx.fillStyle = '#000'; gctx.fillRect(x-11, y-15, hpw, 4);
+        gctx.fillStyle = '#7ad24a'; gctx.fillRect(x-11, y-15, hpf, 4);
+      }
     }
   }
   // turrets
