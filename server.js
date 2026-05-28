@@ -369,6 +369,18 @@ function spawnRocketPickup(room) {
   }
 }
 
+const MAGNET_R = 90, MAGNET_R2 = MAGNET_R * MAGNET_R, MAGNET_SPEED = 5;
+function magnetTo(p, item) {
+  const dx = p.x - item.x, dy = p.y - item.y;
+  const d2 = dx*dx + dy*dy;
+  if (d2 > MAGNET_R2 || d2 < 1) return;
+  const d = Math.sqrt(d2);
+  const step = d < MAGNET_SPEED ? d : MAGNET_SPEED;
+  const inv = 1 / d;
+  item.x += dx * inv * step;
+  item.y += dy * inv * step;
+}
+
 function spawnSoda(room) {
   if (room.sodas.length >= C.MAX_SODAS) return;
   if (Math.random() > C.SODA_SPAWN_CHANCE) return;
@@ -551,27 +563,16 @@ function tick(room) {
       });
       if (p.ammo === 0) { p.reloading = true; p.reloadEndsAt = now + C.RELOAD_MS; }
     }
-    // Magnet: pull nearby pickups toward this player
-    const MAGNET_R = 90, MAGNET_R2 = MAGNET_R * MAGNET_R, MAGNET_SPEED = 5;
-    function magnet(item) {
-      const dx = p.x - item.x, dy = p.y - item.y;
-      const d2 = dx*dx + dy*dy;
-      if (d2 > MAGNET_R2 || d2 < 1) return;
-      const d = Math.sqrt(d2);
-      const step = Math.min(MAGNET_SPEED, d);
-      item.x += (dx/d) * step;
-      item.y += (dy/d) * step;
-    }
     for (let i = room.hearts.length-1; i >= 0; i--) {
       const h = room.hearts[i];
-      if (p.lives < C.MAX_LIVES) magnet(h);
+      if (p.lives < C.MAX_LIVES) magnetTo(p, h);
       if ((h.x-p.x)**2+(h.y-p.y)**2 < (C.PLAYER_R+10)**2 && p.lives < C.MAX_LIVES) {
         p.lives++; room.hearts.splice(i,1);
       }
     }
     for (let i = room.rocketPickups.length-1; i >= 0; i--) {
       const r = room.rocketPickups[i];
-      magnet(r);
+      magnetTo(p, r);
       if ((r.x-p.x)**2+(r.y-p.y)**2 < (C.PLAYER_R+12)**2) {
         p.rockets += C.ROCKET_CHARGES;
         room.rocketPickups.splice(i, 1);
@@ -580,7 +581,7 @@ function tick(room) {
     for (let i = room.sodas.length-1; i >= 0; i--) {
       const s = room.sodas[i];
       const maxHp = (now < p.tankUntil ? C.TANK_HP_BOOST : C.HP_PER_LIFE);
-      if (p.hp < maxHp) magnet(s);
+      if (p.hp < maxHp) magnetTo(p, s);
       if ((s.x-p.x)**2+(s.y-p.y)**2 < (C.PLAYER_R+12)**2 && p.hp < maxHp) {
         p.hp = Math.min(maxHp, p.hp + C.SODA_HEAL);
         room.sodas.splice(i, 1);
@@ -973,15 +974,23 @@ io.on('connection', (socket) => {
     if (!p) return;
     const safe = typeof hat === 'string' && /^[^/\\]+\.png$/i.test(hat) ? hat : '';
     p.hat = safe;
+    let onlyCfg = false;
     if (cfg && typeof cfg === 'object') {
       const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, Number(v) || 0));
-      p.hatCfg = {
+      const nextCfg = {
         ox: clamp(cfg.ox, -2, 2),
         oy: clamp(cfg.oy, -3, 1),
         scale: clamp(cfg.scale, 0.3, 4),
       };
+      onlyCfg = p.hat === safe && !!p.hatCfg;
+      p.hatCfg = nextCfg;
     }
-    io.to(room.code).emit('roomUpdate', publicRoom(room));
+    // Coalesce roomUpdate during rapid hat drag/wheel: max once per ~120ms per player
+    const now = Date.now();
+    if (!onlyCfg || !p._lastHatBroadcast || now - p._lastHatBroadcast > 120) {
+      p._lastHatBroadcast = now;
+      io.to(room.code).emit('roomUpdate', publicRoom(room));
+    }
   });
 
   socket.on('chatName', ({name}) => {
