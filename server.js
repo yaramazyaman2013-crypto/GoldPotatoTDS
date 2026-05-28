@@ -54,7 +54,7 @@ const C = {
   TANK_KILLS_REQUIRED:   5,
   TANK_DURATION:         20 * 1000,
   // Turret
-  TURRET_HP: 45,
+  TURRET_HP: 15,
   TURRET_MOVE_SPEED: 3.2, // px per tick (~128 px/sec at 40Hz) — visibly walking
   TURRET_RANGE: 280,
   TURRET_FIRE_CD: 600,
