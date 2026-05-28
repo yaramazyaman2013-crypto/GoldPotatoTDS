@@ -49,11 +49,18 @@ const C = {
   ROCKET_AOE_R: 70,
   // Classes
   CYBER_ROCKET_INTERVAL: 30 * 1000,
-  ENGINEER_TURRET_CD:    90 * 1000,
-  MEDIC_PET_CD:          210 * 1000,
+  CYBER_ROCKET_PER_INTERVAL: 2,
+  CYBER_START_ROCKETS: 1,
+  ENGINEER_TURRET_CD:    70 * 1000,
+  MEDIC_PET_CD:          65 * 1000,
   TANK_KILLS_REQUIRED:   3,
-  TANK_DURATION:         20 * 1000,
+  TANK_DURATION:         30 * 1000,
   TANK_HP_BOOST:         20,
+  // Soda pickup (rare, +3 HP)
+  SODA_SPAWN_MS:   90 * 1000,
+  MAX_SODAS:       1,
+  SODA_HEAL:       3,
+  SODA_SPAWN_CHANCE: 0.35,
   // Turret
   TURRET_HP: 35,
   TURRET_MOVE_SPEED: 3.2, // px per tick (~128 px/sec at 40Hz) — visibly walking
@@ -279,7 +286,7 @@ function newRoom(ownerSocketId, ownerName, ownerColor, ownerCls, mapName) {
     mapName: mapName || 'default',
     walls: getMapWalls(mapName),
     players: new Map(),
-    bullets: [], hearts: [], rocketPickups: [],
+    bullets: [], hearts: [], rocketPickups: [], sodas: [],
     turrets: [], pets: [],
     roundEndsAt: 0, lastHeartSpawn: 0, lastRocketSpawn: 0,
     nextBulletId: 1, nextHeartId: 1, nextRocketId: 1,
@@ -350,6 +357,16 @@ function spawnRocketPickup(room) {
   }
 }
 
+function spawnSoda(room) {
+  if (room.sodas.length >= C.MAX_SODAS) return;
+  if (Math.random() > C.SODA_SPAWN_CHANCE) return;
+  for (let i = 0; i < 50; i++) {
+    const x = 60 + Math.random() * (C.MAP_W - 120);
+    const y = 60 + Math.random() * (C.MAP_H - 120);
+    if (!hitsWallList(room.walls, x, y, 12)) { room.sodas.push({id: room.nextSodaId++, x, y}); return; }
+  }
+}
+
 function cloneWalls(src) {
   // Per-round room copy: mesh walls get hp; assign ids; build spatial index.
   // Mesh rects (legacy maps saved before NO_MERGE) get split into 1-cell
@@ -388,13 +405,15 @@ function startRound(room) {
   room.started = true;
   // Fresh per-round walls so mesh hp is room-local
   room.walls = cloneWalls(getMapWalls(room.mapName));
-  room.bullets = []; room.hearts = []; room.rocketPickups = [];
+  room.bullets = []; room.hearts = []; room.rocketPickups = []; room.sodas = [];
   room.turrets = []; room.pets = [];
   room.roundEndsAt = Date.now() + C.ROUND_MS;
   const now = Date.now();
   room.lastHeartSpawn = now;
   room.lastRocketSpawn = now;
+  room.lastSodaSpawn = now;
   room.nextBulletId = 1; room.nextHeartId = 1; room.nextRocketId = 1;
+  room.nextSodaId = 1;
   room.nextTurretId = 1; room.nextPetId = 1;
   room.tickCount = 0;
   for (const p of room.players.values()) {
@@ -403,7 +422,7 @@ function startRound(room) {
     p.hp = C.HP_PER_LIFE; p.lives = C.START_LIVES;
     p.alive = true; p.kills = 0; p.angle = 0; p.fireCd = 0;
     p.ammo = C.MAG_SIZE; p.reloading = false; p.reloadEndsAt = 0;
-    p.rockets = 0;
+    p.rockets = (p.cls === 'cyber') ? C.CYBER_START_ROCKETS : 0;
     p.lastCyberRocketAt = now;
     p.turretReadyAt = now + 30000; // 30sn warmup
     p.petReadyAt = now + 30000;
@@ -466,13 +485,16 @@ function tick(room) {
   if (now - room.lastRocketSpawn >= C.ROCKET_SPAWN_MS) {
     spawnRocketPickup(room); room.lastRocketSpawn = now;
   }
+  if (now - (room.lastSodaSpawn||0) >= C.SODA_SPAWN_MS) {
+    spawnSoda(room); room.lastSodaSpawn = now;
+  }
 
   for (const p of room.players.values()) {
     if (!p.alive) continue;
 
     // Class passive: Cyber auto-rockets
     if (p.cls === 'cyber' && now - p.lastCyberRocketAt >= C.CYBER_ROCKET_INTERVAL) {
-      p.rockets += 3;
+      p.rockets += C.CYBER_ROCKET_PER_INTERVAL;
       p.lastCyberRocketAt = now;
     }
     // Tank mode expiry
@@ -541,6 +563,15 @@ function tick(room) {
       if ((r.x-p.x)**2+(r.y-p.y)**2 < (C.PLAYER_R+12)**2) {
         p.rockets += C.ROCKET_CHARGES;
         room.rocketPickups.splice(i, 1);
+      }
+    }
+    for (let i = room.sodas.length-1; i >= 0; i--) {
+      const s = room.sodas[i];
+      const maxHp = (now < p.tankUntil ? C.TANK_HP_BOOST : C.HP_PER_LIFE);
+      if (p.hp < maxHp) magnet(s);
+      if ((s.x-p.x)**2+(s.y-p.y)**2 < (C.PLAYER_R+12)**2 && p.hp < maxHp) {
+        p.hp = Math.min(maxHp, p.hp + C.SODA_HEAL);
+        room.sodas.splice(i, 1);
       }
     }
   }
@@ -744,6 +775,7 @@ function tick(room) {
       bullets: room.bullets.map(b=>({x:b.x, y:b.y, type:b.type||'bullet', angle:b.angle})),
       hearts:  room.hearts.map(h=>({x:h.x, y:h.y})),
       rocketPickups: room.rocketPickups.map(r=>({x:r.x, y:r.y})),
+      sodas:   room.sodas.map(s=>({x:s.x, y:s.y})),
       turrets: room.turrets.map(t=>({x:t.x, y:t.y, angle:t.angle||0, hp:t.hp, maxHp:C.TURRET_HP, owner:t.owner})),
       pets:    room.pets.map(pt=>({x:pt.x, y:pt.y, hp:pt.hp, maxHp:C.PET_HP, expiresAt:pt.expiresAt, owner:pt.owner})),
     });
