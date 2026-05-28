@@ -155,6 +155,33 @@ const AUD = {
     src.connect(filter); filter.connect(g); g.connect(this.sfxGain);
     src.start(t);
   },
+  explode() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    // noise burst (body of explosion)
+    const sr = this.ctx.sampleRate;
+    const buf = this.ctx.createBuffer(1, sr * 0.6, sr);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = (Math.random()*2-1) * Math.pow(1 - i/d.length, 1.5);
+    const src = this.ctx.createBufferSource(); src.buffer = buf;
+    const lp = this.ctx.createBiquadFilter();
+    lp.type = 'lowpass'; lp.frequency.value = 600;
+    const ng = this.ctx.createGain();
+    ng.gain.setValueAtTime(1.2, t);
+    ng.gain.exponentialRampToValueAtTime(0.001, t + 0.55);
+    src.connect(lp); lp.connect(ng); ng.connect(this.sfxGain);
+    src.start(t);
+    // low thump
+    const osc = this.ctx.createOscillator();
+    const og = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(80, t);
+    osc.frequency.exponentialRampToValueAtTime(22, t + 0.35);
+    og.gain.setValueAtTime(1.0, t);
+    og.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+    osc.connect(og); og.connect(this.sfxGain);
+    osc.start(t); osc.stop(t + 0.4);
+  },
 };
 
 function startAudioOnGesture() {
@@ -1069,6 +1096,7 @@ function drawRocket(ctx, x, y, angle) {
 const explosions = [];
 socket.on('explosion', ({x, y, r}) => {
   explosions.push({x, y, r, t: Date.now()});
+  AUD.explode();
 });
 function drawExplosions() {
   const now = Date.now();
