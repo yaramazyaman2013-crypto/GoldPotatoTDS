@@ -803,30 +803,30 @@ function renderHUD() {
   }
 }
 
-// Texture loader: each image is downscaled into a 64x64 tile then turned
-// into a repeating CanvasPattern. Patterns become available as soon as the
-// image arrives; rebuildGroundCache is re-run to pick them up.
-const TEX_TILE = 64;
+// Texture loader: each image is downscaled into a tile then turned into a
+// repeating CanvasPattern. Per-kind tile size lets chunky pixel-art bricks
+// stay readable while smaller noise textures (wood/rust) stay tight.
 const TEXTURES = {};
-function loadTexture(key, src) {
+function loadTexture(key, src, tileSize) {
+  const ts = tileSize || 64;
   const img = new Image();
   img.onload = () => {
     const tile = document.createElement('canvas');
-    tile.width = TEX_TILE; tile.height = TEX_TILE;
+    tile.width = ts; tile.height = ts;
     const tctx = tile.getContext('2d');
     tctx.imageSmoothingEnabled = false;
-    tctx.drawImage(img, 0, 0, TEX_TILE, TEX_TILE);
+    tctx.drawImage(img, 0, 0, ts, ts);
     TEXTURES[key] = { img, tile, pattern: tctx.createPattern(tile, 'repeat') };
     if (state.inGame) rebuildGroundCache();
   };
   img.onerror = () => console.warn('[tex]', key, 'failed:', src);
   img.src = src;
 }
-loadTexture('stone', 'stone.webp');
-loadTexture('wood',  'wood.jpg');
-loadTexture('brick', 'brick.jpg');
-loadTexture('mesh',  'rusty.png');
-loadTexture('water', 'water.png');
+loadTexture('stone', 'stone.webp', 160); // chunky brick — preserve detail
+loadTexture('wood',  'wood.jpg',   64);
+loadTexture('brick', 'brick.jpg',  96);
+loadTexture('mesh',  'rusty.png',  64);
+loadTexture('water', 'water.png',  64);
 
 function drawTree(ctx, x, y, w, h) {
   // foliage circle + trunk; sized to the cell rect
