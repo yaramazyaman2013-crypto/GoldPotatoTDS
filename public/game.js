@@ -907,6 +907,14 @@ window.addEventListener('keydown', e => {
   }
   if (k === 'b' && state.inGame) socket.emit('placeTurret');
   if (k === 'v' && state.inGame) socket.emit('placePet');
+  if (k === 'c' && state.inGame && state.serverState) {
+    const me = state.serverState.players.find(p => p.id === socket.id);
+    if (me && me.alive && me.cls === 'engineer') {
+      socket.emit('moveTurret', { x: mouseX + camX, y: mouseY + camY });
+    } else if (me && me.alive && me.cls === 'sniper') {
+      socket.emit('knifeSwing');
+    }
+  }
   if (e.key === 'Escape' && state.inGame) { togglePause(); e.preventDefault(); }
 });
 window.addEventListener('keyup', e => {
