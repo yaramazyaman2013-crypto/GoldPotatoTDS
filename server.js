@@ -237,12 +237,19 @@ function breakWall(room, wall) {
   io.to(room.code).emit('wallBroken', { id: wall.id });
 }
 function randomSpawnIn(walls) {
-  for (let i = 0; i < 200; i++) {
+  for (let i = 0; i < 500; i++) {
     const x = 60 + Math.random() * (C.MAP_W - 120);
     const y = 60 + Math.random() * (C.MAP_H - 120);
     if (!hitsWallList(walls, x, y, C.PLAYER_R + 4)) return {x, y};
   }
-  return {x: 80, y: 80};
+  // Grid scan fallback: walk across the map in a grid to find any free cell
+  const step = 80;
+  for (let gy = step; gy < C.MAP_H - step; gy += step) {
+    for (let gx = step; gx < C.MAP_W - step; gx += step) {
+      if (!hitsWallList(walls, gx, gy, C.PLAYER_R + 4)) return {x: gx, y: gy};
+    }
+  }
+  return {x: 800, y: 600};
 }
 
 // ============================================================
@@ -415,8 +422,10 @@ function tryMove(p, dx, dy, r) {
   let nx = p.x+dx, ny = p.y+dy;
   nx = Math.max(rr, Math.min(C.MAP_W-rr, nx));
   ny = Math.max(rr, Math.min(C.MAP_H-rr, ny));
-  if (!hitsWallList(walls, nx, p.y, rr)) p.x = nx;
-  if (!hitsWallList(walls, p.x, ny, rr)) p.y = ny;
+  // If already inside a wall (bad spawn), always allow movement so player can escape
+  const stuck = hitsWallList(walls, p.x, p.y, rr);
+  if (stuck || !hitsWallList(walls, nx, p.y, rr)) p.x = nx;
+  if (stuck || !hitsWallList(walls, p.x, ny, rr)) p.y = ny;
 }
 
 function tick(room) {
