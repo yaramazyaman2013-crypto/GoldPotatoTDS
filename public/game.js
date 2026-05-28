@@ -340,9 +340,12 @@ function drawHat(ctx, name, size) {
   if (!img || !img.complete || img.naturalWidth === 0) return;
   const r = size / 2;
   const aspect = img.naturalWidth / img.naturalHeight;
-  const hatW = r * 1.7;
-  const hatH = hatW / aspect;
-  ctx.drawImage(img, -hatW / 2, -r - hatH * 0.55, hatW, hatH);
+  const hatW = Math.round(r * 1.25);
+  const hatH = Math.round(hatW / aspect);
+  // sit on top of head, slightly overlapping
+  const x = Math.round(-hatW / 2);
+  const y = Math.round(-r - hatH * 0.35);
+  ctx.drawImage(img, x, y, hatW, hatH);
 }
 
 // Per-player roll state: tracks world position for smooth velocity
