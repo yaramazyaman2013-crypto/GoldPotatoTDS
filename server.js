@@ -73,10 +73,20 @@ const C = {
   PYRO_FLAME_CD: 90,             // ms between flame chunks
   PYRO_FLAME_SPEED: 13,
   PYRO_FLAME_LIFE: 16,           // ~16 ticks * 13 speed = ~208px range
-  PYRO_FLAME_DMG: 0.3,
+  PYRO_FLAME_DMG: 0.4,
   PYRO_HP_PER_LIFE: 12,          // pyro has more HP per life than others
   PYRO_FUEL_MAX: 50,             // max fuel shots
   PYRO_REFUEL_MS: 2000,          // refuel time when empty
+  // Sniper class
+  SNIPER_DMG: 10,
+  SNIPER_BULLET_SPEED: 36,
+  SNIPER_BULLET_LIFE: 90,        // ~90 ticks * 36 = 3240px (whole map)
+  SNIPER_RELOAD_MS: 10000,
+  SNIPER_FIRE_CD: 200,
+  KNIFE_RANGE: 55,
+  KNIFE_ARC: Math.PI * 0.55,     // ~99° front cone
+  KNIFE_DMG: 3,
+  KNIFE_CD: 600,                 // ms between swings
   // Soda pickup (rare, +3 HP)
   SODA_SPAWN_MS:   45 * 1000,
   MAX_SODAS:       2,
@@ -319,7 +329,7 @@ function newRoom(ownerSocketId, ownerName, ownerColor, ownerCls, mapName) {
   return room;
 }
 
-const VALID_CLASSES = ['cyber','engineer','medic','tank','pyro'];
+const VALID_CLASSES = ['cyber','engineer','medic','tank','pyro','sniper'];
 
 function addPlayer(room, id, name, color, cls) {
   const s = randomSpawnIn(room.walls);
@@ -334,7 +344,7 @@ function addPlayer(room, id, name, color, cls) {
     x: s.x, y: s.y, angle: 0,
     hp: cls === 'pyro' ? C.PYRO_HP_PER_LIFE : C.HP_PER_LIFE, lives: C.START_LIVES,
     alive: true,
-    ammo: cls === 'pyro' ? C.PYRO_FUEL_MAX : C.MAG_SIZE, reloading: false, reloadEndsAt: 0,
+    ammo: cls === 'pyro' ? C.PYRO_FUEL_MAX : (cls === 'sniper' ? 1 : C.MAG_SIZE), reloading: false, reloadEndsAt: 0,
     rockets: 0,
     kills: 0,
     keys: {w:false,a:false,s:false,d:false},
@@ -456,7 +466,7 @@ function startRound(room) {
     p.x = s.x; p.y = s.y;
     p.hp = p.cls === 'pyro' ? C.PYRO_HP_PER_LIFE : C.HP_PER_LIFE; p.lives = C.START_LIVES;
     p.alive = true; p.kills = 0; p.angle = 0; p.fireCd = 0;
-    p.ammo = p.cls === 'pyro' ? C.PYRO_FUEL_MAX : C.MAG_SIZE; p.reloading = false; p.reloadEndsAt = 0;
+    p.ammo = p.cls === 'pyro' ? C.PYRO_FUEL_MAX : (p.cls === 'sniper' ? 1 : C.MAG_SIZE); p.reloading = false; p.reloadEndsAt = 0;
     p.rockets = (p.cls === 'cyber') ? C.CYBER_START_ROCKETS : 0;
     p.lastCyberRocketAt = now;
     p.turretReadyAt = now;
@@ -553,7 +563,7 @@ function tick(room) {
     p.fireCd -= C.TICK_MS;
     if (p.reloading && now >= p.reloadEndsAt) {
       p.reloading = false;
-      p.ammo = p.cls === 'pyro' ? C.PYRO_FUEL_MAX : C.MAG_SIZE;
+      p.ammo = p.cls === 'pyro' ? C.PYRO_FUEL_MAX : (p.cls === 'sniper' ? 1 : C.MAG_SIZE);
     }
 
     // Right click = rocket (if available)
@@ -581,6 +591,17 @@ function tick(room) {
           angle: p.angle, life: C.PYRO_FLAME_LIFE,
         });
         if (p.ammo === 0) { p.reloading = true; p.reloadEndsAt = now + C.PYRO_REFUEL_MS; }
+      } else if (p.cls === 'sniper' && p.ammo > 0) {
+        p.fireCd = C.SNIPER_FIRE_CD;
+        p.ammo--;
+        const m = 20;
+        room.bullets.push({
+          id: room.nextBulletId++, owner: p.id, type: 'sniper', dmg: C.SNIPER_DMG,
+          x: p.x+Math.cos(p.angle)*m, y: p.y+Math.sin(p.angle)*m,
+          vx: Math.cos(p.angle)*C.SNIPER_BULLET_SPEED, vy: Math.sin(p.angle)*C.SNIPER_BULLET_SPEED,
+          angle: p.angle, life: C.SNIPER_BULLET_LIFE,
+        });
+        p.reloading = true; p.reloadEndsAt = now + C.SNIPER_RELOAD_MS;
       } else if (p.ammo > 0) {
         p.fireCd = isTank ? Math.floor(C.FIRE_COOLDOWN * 0.6) : C.FIRE_COOLDOWN;
         p.ammo--;
@@ -827,7 +848,7 @@ function tick(room) {
         id:p.id, name:p.name, color:p.color, cls:p.cls, hat:p.hat, hatCfg:p.hatCfg,
         x:p.x, y:p.y, angle:p.angle,
         hp:p.hp, lives:p.lives, maxHp: (now < p.tankUntil ? C.TANK_HP_BOOST : (p.cls==='pyro' ? C.PYRO_HP_PER_LIFE : C.HP_PER_LIFE)),
-        ammo:p.ammo, maxAmmo: p.cls === 'pyro' ? C.PYRO_FUEL_MAX : C.MAG_SIZE,
+        ammo:p.ammo, maxAmmo: p.cls === 'pyro' ? C.PYRO_FUEL_MAX : (p.cls === 'sniper' ? 1 : C.MAG_SIZE),
         reloading:p.reloading, reloadEndsAt:p.reloadEndsAt,
         rockets:p.rockets,
         tank: now < p.tankUntil, tankUntil: p.tankUntil, tankKills: p.tankKills,
@@ -1010,15 +1031,40 @@ io.on('connection', (socket) => {
     if (typeof input.mouseDown === 'boolean') p.leftDown = input.mouseDown;
   });
 
+  socket.on('knifeSwing', () => {
+    const code = socketRoom.get(socket.id);
+    const room = code && rooms.get(code);
+    if (!room) return;
+    const p = room.players.get(socket.id);
+    if (!p || !p.alive || p.cls !== 'sniper') return;
+    const now = Date.now();
+    if (p.knifeReadyAt && now < p.knifeReadyAt) return;
+    p.knifeReadyAt = now + C.KNIFE_CD;
+    io.to(room.code).emit('knifeFx', { x: p.x, y: p.y, angle: p.angle });
+    const halfArc = C.KNIFE_ARC / 2;
+    for (const target of room.players.values()) {
+      if (!target.alive || target.id === p.id) continue;
+      const dx = target.x - p.x, dy = target.y - p.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > C.KNIFE_RANGE + C.PLAYER_R) continue;
+      const targetAng = Math.atan2(dy, dx);
+      let da = targetAng - p.angle;
+      while (da > Math.PI) da -= Math.PI * 2;
+      while (da < -Math.PI) da += Math.PI * 2;
+      if (Math.abs(da) > halfArc) continue;
+      applyDamage(target, C.KNIFE_DMG, p.id);
+    }
+  });
+
   socket.on('reload', () => {
     const code = socketRoom.get(socket.id);
     const room = code && rooms.get(code);
     if (!room) return;
     const p = room.players.get(socket.id);
-    const maxA = p.cls === 'pyro' ? C.PYRO_FUEL_MAX : C.MAG_SIZE;
+    const maxA = p.cls === 'pyro' ? C.PYRO_FUEL_MAX : (p.cls === 'sniper' ? 1 : C.MAG_SIZE);
     if (!p || !p.alive || p.reloading || p.ammo === maxA || p.cls === 'pyro') return;
     p.reloading = true;
-    p.reloadEndsAt = Date.now() + C.RELOAD_MS;
+    p.reloadEndsAt = Date.now() + (p.cls === 'sniper' ? C.SNIPER_RELOAD_MS : C.RELOAD_MS);
   });
 
   socket.on('changeColor', ({color}) => {

@@ -249,6 +249,7 @@ const CLASS_INFO = {
   medic:    { label: 'DOKTOR',   desc: '65sn: Pet (V, 10sn ömür)<br>2.5dk: +1 can',       color: '#7ad24a' },
   tank:     { label: 'TANK',     desc: '3 kill: 30sn tank modu<br>25 HP, büyük, x2 hasar',color: '#ff5577' },
   pyro:     { label: 'PYRO',     desc: 'Alev silahı (50 yakıt)<br>Yakın mesafe, 2sn dolum', color: '#ff7a1a' },
+  sniper:   { label: 'SNIPER',   desc: '10 hasar, çok uzun menzil<br>1 mermi, 10sn reload<br>Orta tuş: bıçak (3 hasar)', color: '#c8ff5c' },
 };
 
 // ===== Robot pixel art =====
@@ -324,6 +325,8 @@ const _gunImg = new Image();
 _gunImg.src = 'gun.png';
 const _flameImg = new Image();
 _flameImg.src = 'flame.png';
+const _sniperImg = new Image();
+_sniperImg.src = 'sniper.png';
 
 // Hat image cache (key: filename, value: Image)
 const _hatImgCache = new Map();
@@ -413,17 +416,17 @@ function drawRobotTopDown(ctx, x, y, color, angle, alive=true, id=null, wx=0, wy
   ctx.imageSmoothingEnabled = false;
   if (hat) drawHat(ctx, hat, 36, hatCfg);
   // draw weapon rotated toward cursor
-  const weaponImg = cls === 'pyro' ? _flameImg : _gunImg;
+  const weaponImg = cls === 'pyro' ? _flameImg : (cls === 'sniper' ? _sniperImg : _gunImg);
   if (weaponImg.complete && weaponImg.naturalWidth > 0) {
     ctx.save();
     ctx.translate(0, 8);
     ctx.rotate(angle);
     if (cls === 'pyro') {
-      const gw = 36, gh = 20;
-      ctx.drawImage(weaponImg, 2, -gh / 2, gw, gh);
+      ctx.drawImage(weaponImg, 2, -10, 36, 20);
+    } else if (cls === 'sniper') {
+      ctx.drawImage(weaponImg, 0, -9, 44, 18);
     } else {
-      const gw = 32, gh = 16;
-      ctx.drawImage(weaponImg, 2, -gh / 2, gw, gh);
+      ctx.drawImage(weaponImg, 2, -8, 32, 16);
     }
     ctx.restore();
   }
@@ -909,6 +912,8 @@ gameCanvas.addEventListener('mousedown', e => {
       const me = state.serverState.players.find(p => p.id === socket.id);
       if (me && me.alive && me.cls === 'engineer') {
         socket.emit('moveTurret', { x: mouseX + camX, y: mouseY + camY });
+      } else if (me && me.alive && me.cls === 'sniper') {
+        socket.emit('knifeSwing');
       }
     }
     e.preventDefault();
@@ -1200,6 +1205,8 @@ function renderHUD() {
       label = me.tank ? 'TANK ' + Math.ceil((me.tankRemaining||0)/1000) + 's' : 'KILLS ' + (me.tankKills||0) + '/3';
     } else if (me.cls === 'pyro') {
       label = '🔥 ALEV';
+    } else if (me.cls === 'sniper') {
+      label = '🔪 BICAK (orta tuş)';
     }
     if (label) {
       ab.textContent = label;
@@ -1371,6 +1378,10 @@ function drawRocket(ctx, x, y, angle) {
 // Explosions (visual only, server emits 'explosion')
 const explosions = [];
 let lastExplodeSoundAt = 0;
+const knifeFx = [];
+socket.on('knifeFx', ({x, y, angle}) => {
+  knifeFx.push({ x, y, angle, t: Date.now() });
+});
 socket.on('explosion', ({x, y, r, color}) => {
   explosions.push({x, y, r, color: color || null, t: Date.now()});
   const now = Date.now();
@@ -1403,6 +1414,34 @@ function drawDamageNumbers(ss) {
     gctx.fillText(text, x + 1, y + 1);
     gctx.fillStyle = `rgba(${color},${a})`;
     gctx.fillText(text, x, y);
+  }
+}
+
+function drawKnifeFx() {
+  const now = Date.now();
+  const DUR = 250;
+  for (let i = knifeFx.length-1; i >= 0; i--) {
+    const k = knifeFx[i];
+    const age = now - k.t;
+    if (age > DUR) { knifeFx.splice(i, 1); continue; }
+    const f = age / DUR;
+    const a = 1 - f;
+    const range = 55;
+    const arc = Math.PI * 0.55;
+    const startA = k.angle - arc/2 + arc * f;
+    const x = k.x - camX, y = k.y - camY;
+    gctx.save();
+    gctx.strokeStyle = `rgba(255,255,255,${a})`;
+    gctx.lineWidth = 3;
+    gctx.beginPath();
+    gctx.arc(x, y, range, startA - 0.3, startA + 0.1);
+    gctx.stroke();
+    gctx.strokeStyle = `rgba(200,230,255,${a * 0.5})`;
+    gctx.lineWidth = 1.5;
+    gctx.beginPath();
+    gctx.arc(x, y, range - 8, startA - 0.4, startA + 0.15);
+    gctx.stroke();
+    gctx.restore();
   }
 }
 
@@ -1668,12 +1707,24 @@ function render() {
       gctx.beginPath(); gctx.arc(0, 0, 2 + gflick, 0, Math.PI*2); gctx.fill();
       gctx.globalAlpha = 1;
       gctx.restore();
+    } else if (b.type === 'sniper') {
+      const ang = b.angle || 0;
+      gctx.save();
+      gctx.translate(x, y);
+      gctx.rotate(ang);
+      // long bright tracer
+      gctx.fillStyle = 'rgba(200,255,120,0.9)';
+      gctx.fillRect(-24, -1.5, 28, 3);
+      gctx.fillStyle = '#fff';
+      gctx.fillRect(-4, -1, 8, 2);
+      gctx.restore();
     } else {
       gctx.fillStyle='#000'; gctx.fillRect(x-3,y-3,6,6);
       gctx.fillStyle='#ffd24a'; gctx.fillRect(x-2,y-2,4,4);
     }
   }
   drawExplosions();
+  drawKnifeFx();
 
   // pets (heal totems)
   if (ss.pets) {
