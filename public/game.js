@@ -1150,6 +1150,7 @@ function renderHUD() {
   const hp = me ? Math.max(0, me.hp) : 0;
   const maxHp = me && me.maxHp ? me.maxHp : 10;
   $('hpfill').style.width = Math.min(100, hp/maxHp*100) + '%';
+  $('hptext').textContent = hp + ' / ' + maxHp;
   // dead overlay
   $('dead').classList.toggle('hidden', !me || me.alive);
   // ammo (bullets) — rockets shown separately (right click)

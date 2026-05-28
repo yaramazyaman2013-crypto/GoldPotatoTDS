@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <title>Gold Wave</title>
-<link rel="stylesheet" href="style.css?v=v11" />
+<link rel="stylesheet" href="style.css?v=v12" />
 </head>
 <body>
 <!-- MAIN MENU -->
@@ -108,7 +108,7 @@
   <div id="hud">
     <div id="leaderboard" class="lb"></div>
     <div id="timer" class="timer">10:00</div>
-    <div id="hpbar" class="hpbar"><div id="hpfill"></div></div>
+    <div id="hpbar" class="hpbar"><div id="hpfill"></div><span id="hptext" class="hptext"></span></div>
     <div id="ammo" class="ammo"><span id="ammoCur">30</span><span class="max">/30</span></div>
     <div id="rocketBadge" class="rocket-badge hidden">🚀 0</div>
     <button id="abilityBtn" class="ability-btn hidden"></button>
@@ -144,6 +144,6 @@
 <audio id="bgMusic" src="music.mp3" loop preload="auto" style="display:none"></audio>
 <script src="supabase-config.js"></script>
 <script src="/socket.io/socket.io.js"></script>
-<script src="game.js?v=v11"></script>
+<script src="game.js?v=v12"></script>
 </body>
 </html>
