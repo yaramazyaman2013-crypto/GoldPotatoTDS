@@ -143,6 +143,19 @@ canvas { image-rendering: pixelated; display: block; }
   font-family: "Press Start 2P", monospace; font-size: 10px;
 }
 .hat-palette .none-opt.selected { border-color: #ffd24a; }
+.palette-close {
+  position: absolute;
+  top: -14px; right: -14px;
+  width: 32px; height: 32px;
+  background: #ff5577;
+  color: #fff;
+  border: 3px solid #000;
+  font-family: "Press Start 2P", monospace;
+  font-size: 14px;
+  cursor: pointer;
+  z-index: 20;
+  box-shadow: 2px 2px 0 #000;
+}
 
 /* PANELS */
 .panel {

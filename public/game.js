@@ -555,6 +555,14 @@ renderPreview();
 drawShirt($('shirtIcon').getContext('2d'));
 
 const palette = $('colorPalette');
+function addCloseBtn(el) {
+  const btn = document.createElement('button');
+  btn.className = 'palette-close';
+  btn.textContent = 'X';
+  btn.addEventListener('click', () => el.classList.add('hidden'));
+  el.appendChild(btn);
+}
+addCloseBtn(palette);
 COLORS.forEach(c => {
   const cv = document.createElement('canvas');
   cv.width = 56; cv.height = 70;
@@ -604,6 +612,7 @@ function makeHatSwatch(name) {
 }
 function loadHats() {
   hatPalette.innerHTML = '';
+  addCloseBtn(hatPalette);
   const none = document.createElement('div');
   none.className = 'none-opt';
   none.textContent = 'YOK';
@@ -1493,10 +1502,6 @@ function render() {
       gctx.beginPath(); gctx.arc(p.x-camX, p.y-camY, 28, 0, Math.PI*2); gctx.fill();
     }
     drawRobotTopDown(gctx, p.x-camX, p.y-camY, p.color, p.angle, p.alive, p.id, p.x, p.y, p.hat||'');
-    gctx.fillStyle='#000'; gctx.fillRect(p.x-camX-30, p.y-camY-30, 60, 12);
-    gctx.fillStyle = p.id===socket.id ? '#ffd24a' : '#fff';
-    gctx.font='10px "Press Start 2P",monospace'; gctx.textAlign='center';
-    gctx.fillText(p.name.slice(0,8), p.x-camX, p.y-camY-20);
     // life pips — cached offscreen canvas avoids 130+ fillRect per player/frame
     const lives = typeof p.lives==='number' ? p.lives : 0;
     const maxPips = 5, heartW = 10, gap = 3;
@@ -1504,6 +1509,11 @@ function render() {
     const pipImg = getPipRow(lives, maxPips);
     const py2 = Math.floor(p.y-camY+22);
     gctx.drawImage(pipImg, Math.floor(p.x-camX-totalW/2), py2);
+    // name below hearts
+    gctx.fillStyle='#000'; gctx.fillRect(p.x-camX-30, p.y-camY+38, 60, 12);
+    gctx.fillStyle = p.id===socket.id ? '#ffd24a' : '#fff';
+    gctx.font='10px "Press Start 2P",monospace'; gctx.textAlign='center';
+    gctx.fillText(p.name.slice(0,8), p.x-camX, p.y-camY+48);
   }
 
   // crosshair
