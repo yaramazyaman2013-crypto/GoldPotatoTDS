@@ -64,6 +64,7 @@ const C = {
   CYBER_START_ROCKETS: 1,
   ENGINEER_TURRET_CD:    70 * 1000,
   MEDIC_PET_CD:          65 * 1000,
+  MEDIC_HEART_CD:        150 * 1000,
   TANK_KILLS_REQUIRED:   3,
   TANK_DURATION:         30 * 1000,
   TANK_HP_BOOST:         20,
@@ -77,8 +78,8 @@ const C = {
   TURRET_MOVE_SPEED: 3.2, // px per tick (~128 px/sec at 40Hz) — visibly walking
   TURRET_RANGE: 460,
   TURRET_FIRE_CD: 120,           // rapid fire between shots
-  TURRET_MAG_SIZE: 40,           // shots before reload
-  TURRET_RELOAD_MS: 2000,        // 2sn reload
+  TURRET_MAG_SIZE: 35,           // shots before reload
+  TURRET_RELOAD_MS: 3000,        // 3sn reload
   TURRET_BULLET_DMG: 2,
   TURRET_BULLET_SPEED: 12,
   // Pet
@@ -334,6 +335,7 @@ function addPlayer(room, id, name, color, cls) {
     lastCyberRocketAt: Date.now(),
     turretReadyAt: Date.now(),
     petReadyAt: Date.now(),
+    heartReadyAt: Date.now() + 150 * 1000,
     tankUntil: 0,
     tankKills: 0, // resets each round; counts kills since last tank form
   };
@@ -451,6 +453,7 @@ function startRound(room) {
     p.lastCyberRocketAt = now;
     p.turretReadyAt = now;
     p.petReadyAt = now;
+    p.heartReadyAt = now + C.MEDIC_HEART_CD;
     p.tankUntil = 0; p.tankKills = 0;
   }
   for (let i = 0; i < 4; i++) spawnHeart(room);
@@ -521,6 +524,11 @@ function tick(room) {
     if (p.cls === 'cyber' && now - p.lastCyberRocketAt >= C.CYBER_ROCKET_INTERVAL) {
       p.rockets += C.CYBER_ROCKET_PER_INTERVAL;
       p.lastCyberRocketAt = now;
+    }
+    // Class passive: Medic auto-heart (every 2.5min, if lives < max)
+    if (p.cls === 'medic' && now >= p.heartReadyAt && p.lives < C.MAX_LIVES) {
+      p.lives++;
+      p.heartReadyAt = now + C.MEDIC_HEART_CD;
     }
     // Tank mode expiry
     const isTank = now < p.tankUntil;
@@ -774,6 +782,24 @@ function tick(room) {
           if (dmg > 0) applyDamage(p, dmg, b.owner);
         }
       }
+      // splash damage to turrets
+      for (const tu of room.turrets) {
+        const d2 = (tu.x-b.x)**2 + (tu.y-b.y)**2;
+        if (d2 < C.ROCKET_AOE_R**2) {
+          const dist = Math.sqrt(d2);
+          const dmg = dist < 30 ? C.TURRET_HP : Math.ceil(C.TURRET_HP * 0.6 * (1 - dist/C.ROCKET_AOE_R));
+          if (dmg > 0) tu.hp -= dmg;
+        }
+      }
+      // splash damage to pets
+      for (const pt of room.pets) {
+        const d2 = (pt.x-b.x)**2 + (pt.y-b.y)**2;
+        if (d2 < C.ROCKET_AOE_R**2) {
+          const dist = Math.sqrt(d2);
+          const dmg = dist < 30 ? C.PET_HP : Math.ceil(C.PET_HP * 0.6 * (1 - dist/C.ROCKET_AOE_R));
+          if (dmg > 0) pt.hp -= dmg;
+        }
+      }
       room.bullets.splice(i, 1);
     }
   }
@@ -793,6 +819,7 @@ function tick(room) {
         petReadyAt: p.petReadyAt,
         turretReadyIn: Math.max(0, p.turretReadyAt - now),
         petReadyIn: Math.max(0, p.petReadyAt - now),
+        heartReadyIn: Math.max(0, p.heartReadyAt - now),
         cyberReadyIn: p.cls === 'cyber' ? Math.max(0, (p.lastCyberRocketAt + C.CYBER_ROCKET_INTERVAL) - now) : 0,
         tankRemaining: Math.max(0, p.tankUntil - now),
         alive:p.alive, kills:p.kills,
