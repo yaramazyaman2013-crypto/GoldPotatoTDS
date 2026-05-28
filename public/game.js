@@ -1628,11 +1628,36 @@ function render() {
     if (x < -8 || y < -8 || x > W+8 || y > H+8) continue;
     if (b.type === 'rocket') drawRocket(gctx, x, y, b.angle||0);
     else if (b.type === 'flame') {
-      const flick = Math.random();
-      gctx.fillStyle = `rgba(255,${100+Math.floor(flick*80)},0,0.85)`;
-      gctx.beginPath(); gctx.arc(x, y, 4 + flick*3, 0, Math.PI*2); gctx.fill();
-      gctx.fillStyle = `rgba(255,240,80,0.7)`;
-      gctx.beginPath(); gctx.arc(x, y, 2, 0, Math.PI*2); gctx.fill();
+      const seed = (b.id || 0) * 1.618;
+      const t = Date.now() * 0.001;
+      // fast flicker per bullet — stable seed keeps bullets visually distinct
+      const f1 = Math.sin(t * 14 + seed) * 0.5 + 0.5;
+      const f2 = Math.sin(t * 20 + seed * 1.4) * 0.5 + 0.5;
+      const f3 = Math.sin(t * 9  + seed * 0.7) * 0.5 + 0.5;
+      const ang = b.angle || 0;
+      gctx.save();
+      gctx.translate(x, y);
+      gctx.rotate(ang);
+      // elongate in direction of travel so it looks like a streak
+      gctx.scale(1.6, 1.0);
+      // outer glow
+      gctx.globalAlpha = 0.18 + f3 * 0.12;
+      gctx.fillStyle = '#ff3300';
+      gctx.beginPath(); gctx.arc(0, 0, 11 + f1 * 5, 0, Math.PI*2); gctx.fill();
+      // flame body
+      gctx.globalAlpha = 0.7 + f2 * 0.25;
+      gctx.fillStyle = `rgb(255,${Math.floor(60 + f1 * 130)},0)`;
+      gctx.beginPath(); gctx.arc(0, 0, 6 + f1 * 3, 0, Math.PI*2); gctx.fill();
+      // hot inner core
+      gctx.globalAlpha = 0.95;
+      gctx.fillStyle = `rgb(255,${Math.floor(210 + f2 * 45)},${Math.floor(f3 * 60)})`;
+      gctx.beginPath(); gctx.arc(0, 0, 2.5 + f3, 0, Math.PI*2); gctx.fill();
+      // white-hot tip
+      gctx.globalAlpha = 0.8;
+      gctx.fillStyle = '#fff';
+      gctx.beginPath(); gctx.arc(0, 0, 1.2, 0, Math.PI*2); gctx.fill();
+      gctx.globalAlpha = 1;
+      gctx.restore();
     } else {
       gctx.fillStyle='#000'; gctx.fillRect(x-3,y-3,6,6);
       gctx.fillStyle='#ffd24a'; gctx.fillRect(x-2,y-2,4,4);
