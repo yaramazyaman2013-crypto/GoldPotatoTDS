@@ -74,7 +74,7 @@ const C = {
   // Turret
   TURRET_HP: 40,
   TURRET_MOVE_SPEED: 3.2, // px per tick (~128 px/sec at 40Hz) — visibly walking
-  TURRET_RANGE: 280,
+  TURRET_RANGE: 460,
   TURRET_FIRE_CD: 120,           // rapid fire between shots
   TURRET_MAG_SIZE: 40,           // shots before reload
   TURRET_RELOAD_MS: 2000,        // 2sn reload
@@ -677,7 +677,14 @@ function tick(room) {
       }
       io.to(room.code).emit('kill', {killer: killer?killer.name:'?', victim: victim.name});
       if (victim.lives <= 0) { victim.alive = false; }
-      else { const s=randomSpawnIn(room.walls); victim.x=s.x; victim.y=s.y; victim.hp=C.HP_PER_LIFE; }
+      else {
+        const s=randomSpawnIn(room.walls);
+        victim.x=s.x; victim.y=s.y; victim.hp=C.HP_PER_LIFE;
+        // Defensive: ensure cooldowns don't drift beyond their intended window
+        const nowR = Date.now();
+        if (victim.turretReadyAt > nowR + C.ENGINEER_TURRET_CD) victim.turretReadyAt = nowR + C.ENGINEER_TURRET_CD;
+        if (victim.petReadyAt    > nowR + C.MEDIC_PET_CD)       victim.petReadyAt    = nowR + C.MEDIC_PET_CD;
+      }
     }
   }
 
