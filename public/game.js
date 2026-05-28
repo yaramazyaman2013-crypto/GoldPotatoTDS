@@ -1109,6 +1109,11 @@ socket.on('state', (s) => {
   }
 });
 
+socket.on('heal', ({ id, amount }) => {
+  if (!amount) return;
+  damageNumbers.push({ id, dmg: -amount, t: Date.now(), seed: Math.random() });
+});
+
 socket.on('kill', ({ killer, victim }) => {
   state.killfeed.unshift({ killer, victim, t: Date.now() });
   if (state.killfeed.length > 6) state.killfeed.pop();
@@ -1379,10 +1384,13 @@ function drawDamageNumbers(ss) {
     const dy = -30 - f * 30;
     const x = p.x - camX + dx;
     const y = p.y - camY + dy;
+    const isHeal = d.dmg < 0;
+    const text = isHeal ? '+' + (-d.dmg) : '-' + d.dmg;
+    const color = isHeal ? '90,255,130' : '255,90,90';
     gctx.fillStyle = `rgba(0,0,0,${a})`;
-    gctx.fillText('-' + d.dmg, x + 1, y + 1);
-    gctx.fillStyle = `rgba(255,90,90,${a})`;
-    gctx.fillText('-' + d.dmg, x, y);
+    gctx.fillText(text, x + 1, y + 1);
+    gctx.fillStyle = `rgba(${color},${a})`;
+    gctx.fillText(text, x, y);
   }
 }
 

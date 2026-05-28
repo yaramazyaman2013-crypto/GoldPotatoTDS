@@ -69,10 +69,10 @@ const C = {
   TANK_DURATION:         30 * 1000,
   TANK_HP_BOOST:         25,
   // Soda pickup (rare, +3 HP)
-  SODA_SPAWN_MS:   90 * 1000,
-  MAX_SODAS:       1,
+  SODA_SPAWN_MS:   45 * 1000,
+  MAX_SODAS:       2,
   SODA_HEAL:       3,
-  SODA_SPAWN_CHANCE: 0.35,
+  SODA_SPAWN_CHANCE: 0.7,
   // Turret
   TURRET_HP: 40,
   TURRET_MOVE_SPEED: 3.2, // px per tick (~128 px/sec at 40Hz) — visibly walking
@@ -592,7 +592,9 @@ function tick(room) {
       const maxHp = (now < p.tankUntil ? C.TANK_HP_BOOST : C.HP_PER_LIFE);
       if (p.hp < maxHp) magnetTo(p, s);
       if ((s.x-p.x)**2+(s.y-p.y)**2 < (C.PLAYER_R+12)**2 && p.hp < maxHp) {
+        const before = p.hp;
         p.hp = Math.min(maxHp, p.hp + C.SODA_HEAL);
+        io.to(room.code).emit('heal', { id: p.id, amount: p.hp - before });
         room.sodas.splice(i, 1);
       }
     }
