@@ -70,10 +70,10 @@ const C = {
   TANK_DURATION:         30 * 1000,
   TANK_HP_BOOST:         25,
   // Pyro flame weapon
-  PYRO_FLAME_CD: 50,             // ms between flame shots (rapid fire)
-  PYRO_FLAME_SPEED: 18,
-  PYRO_FLAME_LIFE: 11,           // ~11 ticks * 18 speed = ~200px range
-  PYRO_FLAME_DMG: 3,
+  PYRO_FLAME_CD: 130,            // ms between flame shots
+  PYRO_FLAME_SPEED: 14,
+  PYRO_FLAME_LIFE: 8,            // ~8 ticks * 14 speed = ~112px range (very short)
+  PYRO_FLAME_DMG: 1,
   // Soda pickup (rare, +3 HP)
   SODA_SPAWN_MS:   45 * 1000,
   MAX_SODAS:       2,
