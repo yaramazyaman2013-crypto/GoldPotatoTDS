@@ -389,7 +389,10 @@ $('btnCreateRoom').addEventListener('click', async () => {
   if (state.mapName && state.mapName !== 'default') {
     try {
       const walls = await sbGetMap(state.mapName);
-      if (Array.isArray(walls)) payload.customMap = walls;
+      if (Array.isArray(walls)) {
+        payload.customMap = stripMeta(walls);
+        payload.groundColor = extractGroundColor(walls);
+      }
     } catch (e) { console.warn('[maps] getMap failed:', e.message); }
   }
   socket.emit('createRoom', payload, (res) => {
@@ -600,6 +603,7 @@ setInterval(() => {
 socket.on('roundStart', (data) => {
   state.walls = data.walls;
   state.mapW = data.mapW; state.mapH = data.mapH;
+  state.groundColor = data.groundColor || '#4a6a3a';
   state.endsAt = data.endsAt;
   state.inGame = true; state.killfeed = [];
   state.cyberAnchor = Date.now();
@@ -788,8 +792,51 @@ function renderHUD() {
   }
 }
 
+// Stone texture (webp). Loaded once, used as repeating pattern for stone walls.
+const stoneImg = new Image();
+let stonePattern = null;
+stoneImg.onload = () => {
+  // Build a CanvasPattern once on an offscreen 2D context. Reused across renders.
+  const off = document.createElement('canvas').getContext('2d');
+  stonePattern = off.createPattern(stoneImg, 'repeat');
+  // Re-bake ground cache so existing stone walls pick up the texture
+  if (state.inGame) rebuildGroundCache();
+};
+stoneImg.src = 'stone.webp';
+
+function drawTree(ctx, x, y, w, h) {
+  // foliage circle + trunk; sized to the cell rect
+  const cx = x + w/2, cy = y + h/2;
+  const fr = Math.min(w, h) * 0.46;
+  // shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath(); ctx.ellipse(cx+2, y+h-4, fr*0.85, fr*0.35, 0, 0, Math.PI*2); ctx.fill();
+  // trunk
+  const tw = Math.max(4, Math.floor(w*0.18));
+  ctx.fillStyle = '#3a2010'; ctx.fillRect(Math.floor(cx-tw/2), Math.floor(cy), tw, Math.floor(h*0.45));
+  ctx.fillStyle = '#5a3018'; ctx.fillRect(Math.floor(cx-tw/2), Math.floor(cy), 2, Math.floor(h*0.45));
+  // foliage (3 stacked circles for pixelart look)
+  ctx.fillStyle = '#1a3a14'; ctx.beginPath(); ctx.arc(cx, cy-2, fr, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#2a5a20'; ctx.beginPath(); ctx.arc(cx-fr*0.25, cy-fr*0.3, fr*0.78, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#4a8a30'; ctx.beginPath(); ctx.arc(cx-fr*0.4, cy-fr*0.5, fr*0.45, 0, Math.PI*2); ctx.fill();
+  // highlight pixel
+  ctx.fillStyle = '#7ad24a'; ctx.fillRect(Math.floor(cx-fr*0.5), Math.floor(cy-fr*0.6), 3, 3);
+}
+
 function drawWall(ctx, x, y, w, h, kind) {
+  if (kind === 'tree') { drawTree(ctx, x, y, w, h); return; }
   const s = WALL_STYLES[kind] || WALL_STYLES.stone;
+  if (kind === 'stone' && stonePattern) {
+    // Tile the webp texture; keep light/dark edges on top for chunky 3D look
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.fillStyle = stonePattern;
+    ctx.fillRect(0, 0, w, h);
+    ctx.restore();
+    ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.fillRect(x, y, w, 2); ctx.fillRect(x, y, 2, h);
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';       ctx.fillRect(x, y+h-2, w, 2); ctx.fillRect(x+w-2, y, 2, h);
+    return;
+  }
   ctx.fillStyle = s.base; ctx.fillRect(x, y, w, h);
   ctx.fillStyle = s.light; ctx.fillRect(x, y, w, 3); ctx.fillRect(x, y, 3, h);
   ctx.fillStyle = s.dark;  ctx.fillRect(x, y+h-3, w, 3); ctx.fillRect(x+w-3, y, 3, h);
@@ -903,9 +950,18 @@ function rebuildGroundCache() {
   cv.width = state.mapW; cv.height = state.mapH;
   const c = cv.getContext('2d');
   c.imageSmoothingEnabled = false;
-  // grass base
-  c.fillStyle = '#4a6a3a';
-  c.fillRect(0, 0, state.mapW, state.mapH);
+  // ground base (chosen color, with slight checker variation + sparse detail)
+  const base = state.groundColor || '#4a6a3a';
+  // derive a slightly darker shade for the checker
+  function shade(hex, f) {
+    const n = parseInt(hex.slice(1), 16);
+    const r = Math.max(0, Math.min(255, ((n>>16)&255) + f|0));
+    const g = Math.max(0, Math.min(255, ((n>>8)&255) + f|0));
+    const b = Math.max(0, Math.min(255, (n&255) + f|0));
+    return '#' + ((r<<16)|(g<<8)|b).toString(16).padStart(6,'0');
+  }
+  const dark = shade(base, -16);
+  c.fillStyle = base; c.fillRect(0, 0, state.mapW, state.mapH);
   const ts = 32;
   for (let ty = 0; ty < Math.ceil(state.mapH/ts); ty++) {
     for (let tx = 0; tx < Math.ceil(state.mapW/ts); tx++) {
@@ -913,11 +969,11 @@ function rebuildGroundCache() {
       const isDirt = (hash % 17) === 0;
       let col;
       if (isDirt) col = '#6b4a2a';
-      else col = (tx+ty)%2===0 ? '#4a6a3a' : '#3e5a30';
+      else col = (tx+ty)%2===0 ? base : dark;
       c.fillStyle = col;
       c.fillRect(tx*ts, ty*ts, ts, ts);
       if (!isDirt && (hash % 23) === 0) {
-        c.fillStyle = '#6a8a4a';
+        c.fillStyle = shade(base, +24);
         c.fillRect(tx*ts+6, ty*ts+10, 2, 4);
         c.fillRect(tx*ts+10, ty*ts+8, 2, 6);
         c.fillRect(tx*ts+14, ty*ts+12, 2, 4);
@@ -1253,13 +1309,40 @@ const WALL_STYLES = {
   wood:  { base: '#6b4220', light: '#a06030', dark: '#3a2010', label: 'AHSAP', swatch: '#8a5a2a' },
   brick: { base: '#a33c20', light: '#d05a30', dark: '#5a1a10', label: 'TUGLA', swatch: '#c4502a' },
   mesh:  { base: '#5a4a30', light: '#8a7050', dark: '#2a2018', label: 'TEL',  swatch: '#a08050' },
+  tree:  { base: '#2a5a20', light: '#4a8a30', dark: '#1a3a14', label: 'AGAC', swatch: '#2a7a30' },
 };
+// Available ground (grass/dirt) colors for the editor + custom maps
+const GROUND_COLORS = [
+  { name: 'cimen',   color: '#4a6a3a' },
+  { name: 'kuruot',  color: '#9a8a3a' },
+  { name: 'kum',     color: '#d0b070' },
+  { name: 'kar',     color: '#d8e0e8' },
+  { name: 'cam',     color: '#0a8a8a' },
+  { name: 'kayal',   color: '#5a5a6a' },
+  { name: 'lav',     color: '#a04020' },
+  { name: 'mor',     color: '#5a2a6a' },
+];
 const EDITOR = {
   gridW: 40, gridH: 30, cellSize: 40,
   grid: null,            // 2D array: null or kind string
   brush: 'stone',        // currently selected paint kind, or 'erase'
   active: false,
+  groundColor: '#4a6a3a',
 };
+// In-memory per-map ground color (used when host creates room with custom map).
+// Encoded into walls array as a sentinel rect (w=0,h=0) so server's
+// sanitizeWalls filters it out of collision but Supabase persists it.
+function encodeGroundMeta(walls, groundColor) {
+  return [...walls, { x:0, y:0, w:0, h:0, kind:'_meta', groundColor }];
+}
+function extractGroundColor(walls) {
+  if (!Array.isArray(walls)) return '#4a6a3a';
+  const meta = walls.find(w => w && w.kind === '_meta');
+  return (meta && meta.groundColor) || '#4a6a3a';
+}
+function stripMeta(walls) {
+  return Array.isArray(walls) ? walls.filter(w => w && w.kind !== '_meta') : walls;
+}
 function newGrid() {
   return Array.from({length: EDITOR.gridH}, () => Array(EDITOR.gridW).fill(null));
 }
@@ -1294,11 +1377,13 @@ function gridToWalls(grid) {
 function wallsToGrid(walls) {
   const g = newGrid();
   for (const w of walls) {
+    if (!w || w.w <= 0 || w.h <= 0) continue;
     const x0 = Math.max(0, Math.floor(w.x / EDITOR.cellSize));
     const y0 = Math.max(0, Math.floor(w.y / EDITOR.cellSize));
     const x1 = Math.min(EDITOR.gridW, Math.ceil((w.x+w.w) / EDITOR.cellSize));
     const y1 = Math.min(EDITOR.gridH, Math.ceil((w.y+w.h) / EDITOR.cellSize));
-    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) g[y][x] = true;
+    const kind = WALL_STYLES[w.kind] ? w.kind : 'stone';
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) g[y][x] = kind;
   }
   return g;
 }
@@ -1307,16 +1392,20 @@ function openEditor(name) {
   EDITOR.active = true;
   function withBlank() {
     EDITOR.grid = newGrid();
-    for (let x = 0; x < EDITOR.gridW; x++) { EDITOR.grid[0][x] = true; EDITOR.grid[EDITOR.gridH-1][x] = true; }
-    for (let y = 0; y < EDITOR.gridH; y++) { EDITOR.grid[y][0] = true; EDITOR.grid[y][EDITOR.gridW-1] = true; }
+    EDITOR.groundColor = '#4a6a3a';
+    for (let x = 0; x < EDITOR.gridW; x++) { EDITOR.grid[0][x] = 'stone'; EDITOR.grid[EDITOR.gridH-1][x] = 'stone'; }
+    for (let y = 0; y < EDITOR.gridH; y++) { EDITOR.grid[y][0] = 'stone'; EDITOR.grid[y][EDITOR.gridW-1] = 'stone'; }
     $('editorName').value = name || 'map' + Math.floor(Math.random()*100);
+    renderGroundPicker();
     show('editor'); drawEditor();
   }
   if (name && name !== 'default' && serverMaps.includes(name)) {
     sbGetMap(name).then(walls => {
       if (Array.isArray(walls)) {
-        EDITOR.grid = wallsToGrid(walls);
+        EDITOR.groundColor = extractGroundColor(walls);
+        EDITOR.grid = wallsToGrid(stripMeta(walls));
         $('editorName').value = name;
+        renderGroundPicker();
         show('editor'); drawEditor();
       } else withBlank();
     }).catch(() => withBlank());
@@ -1333,8 +1422,9 @@ function drawEditor() {
   cv.width = EDITOR.gridW * cs;
   cv.height = EDITOR.gridH * cs;
   ctx.imageSmoothingEnabled = false;
-  // grass bg
-  ctx.fillStyle = '#3e5a30'; ctx.fillRect(0,0,cv.width,cv.height);
+  // ground (chosen color)
+  ctx.fillStyle = EDITOR.groundColor || '#4a6a3a';
+  ctx.fillRect(0,0,cv.width,cv.height);
   // grid
   ctx.strokeStyle = 'rgba(0,0,0,0.25)';
   for (let x = 0; x <= EDITOR.gridW; x++) { ctx.beginPath(); ctx.moveTo(x*cs,0); ctx.lineTo(x*cs,cv.height); ctx.stroke(); }
@@ -1343,10 +1433,32 @@ function drawEditor() {
   for (let y = 0; y < EDITOR.gridH; y++) for (let x = 0; x < EDITOR.gridW; x++) {
     const kind = EDITOR.grid[y][x];
     if (!kind) continue;
+    if (kind === 'tree') {
+      drawTree(ctx, x*cs, y*cs, cs, cs);
+      continue;
+    }
     const s = WALL_STYLES[kind] || WALL_STYLES.stone;
     ctx.fillStyle = s.base;  ctx.fillRect(x*cs, y*cs, cs, cs);
     ctx.fillStyle = s.light; ctx.fillRect(x*cs, y*cs, cs, 2);
     ctx.fillStyle = s.dark;  ctx.fillRect(x*cs, y*cs+cs-2, cs, 2);
+  }
+}
+
+function renderGroundPicker() {
+  const root = $('groundPicker');
+  if (!root) return;
+  root.innerHTML = '';
+  for (const g of GROUND_COLORS) {
+    const b = document.createElement('button');
+    b.className = 'pixel-btn small brush-btn';
+    b.innerHTML = `<span class="brush-swatch" style="background:${g.color}"></span> ${g.name.toUpperCase()}`;
+    if (EDITOR.groundColor === g.color) b.classList.add('selected');
+    b.addEventListener('click', () => {
+      EDITOR.groundColor = g.color;
+      renderGroundPicker();
+      drawEditor();
+    });
+    root.appendChild(b);
   }
 }
 
@@ -1394,7 +1506,7 @@ function renderBrushPicker() {
   const root = $('brushPicker');
   if (!root) return;
   root.innerHTML = '';
-  for (const kind of ['stone','wood','brick','mesh','erase']) {
+  for (const kind of ['stone','wood','brick','mesh','tree','erase']) {
     const b = document.createElement('button');
     b.className = 'pixel-btn small brush-btn';
     if (kind === 'erase') {
@@ -1418,7 +1530,7 @@ const btnSaveMap = $('btnSaveMap');
 if (btnSaveMap) btnSaveMap.addEventListener('click', async () => {
   const name = ($('editorName').value || '').trim().slice(0, 24);
   if (!name || name === 'default') return alert('Geçerli bir isim gir');
-  const walls = gridToWalls(EDITOR.grid);
+  const walls = encodeGroundMeta(gridToWalls(EDITOR.grid), EDITOR.groundColor);
   try {
     await sbSaveMap(name, walls);
     state.mapName = name;
