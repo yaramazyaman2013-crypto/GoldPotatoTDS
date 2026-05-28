@@ -571,7 +571,7 @@ function renderPreview() {
     previewCtx.fillStyle = 'rgba(255,210,74,0.8)';
     previewCtx.font = '10px "Press Start 2P", monospace';
     previewCtx.textAlign = 'center';
-    previewCtx.fillText('SAPKAYI SURUKLE / TEKERLEK = BUYUT', 180, 450);
+    previewCtx.fillText('SAPKAYI SURUKLE', 180, 450);
   }
 }
 renderPreview();
@@ -614,16 +614,6 @@ drawShirt($('shirtIcon').getContext('2d'));
       socket.emit('setHat', { hat: state.hat, cfg: c });
     }
   });
-  previewCanvas.addEventListener('wheel', e => {
-    if (!state.hat) return;
-    e.preventDefault();
-    const cfg = getHatCfg(state.hat);
-    const step = e.deltaY > 0 ? 0.92 : 1.08;
-    cfg.scale = Math.max(0.5, Math.min(3.5, cfg.scale * step));
-    setHatCfg(state.hat, cfg);
-    renderPreview();
-    if (state.roomId) socket.emit('setHat', { hat: state.hat, cfg });
-  }, { passive: false });
 })();
 
 const palette = $('colorPalette');
@@ -687,7 +677,7 @@ function loadHats() {
   addCloseBtn(hatPalette);
   const hint = document.createElement('div');
   hint.className = 'hat-hint';
-  hint.textContent = 'SAPKAYI SURUKLE • TEKERLEK = BUYUT/KUCULT';
+  hint.textContent = 'SAPKAYI KARAKTERE SURUKLEYEREK KONUMLANDIR';
   hatPalette.appendChild(hint);
   const none = document.createElement('div');
   none.className = 'none-opt';
@@ -1046,6 +1036,8 @@ function getInterpState() {
 }
 
 let lastAmmo = null, wasReloading = false, lastRocketCount = 0;
+const _lastHp = new Map();        // player id → last seen hp
+const damageNumbers = [];         // { id, dmg, t }
 socket.on('state', (s) => {
   // Advance interpolation buffer; clear cached prevMap so it rebuilds next frame
   interpBuf.prev = interpBuf.cur;
@@ -1056,6 +1048,14 @@ socket.on('state', (s) => {
 
   state.serverState = s;
   state.endsAt = s.endsAt;
+  // Detect HP drops on all players → spawn floating damage numbers
+  for (const p of s.players) {
+    const prev = _lastHp.get(p.id);
+    if (prev !== undefined && p.alive && p.hp < prev) {
+      damageNumbers.push({ id: p.id, dmg: prev - p.hp, t: Date.now(), seed: Math.random() });
+    }
+    _lastHp.set(p.id, p.alive ? p.hp : (p.maxHp || 10));
+  }
   const me = s.players.find(p => p.id === socket.id);
   if (me) {
     if (state.cls === 'cyber' && me.rockets > lastRocketCount) state.cyberAnchor = Date.now();
@@ -1322,6 +1322,30 @@ socket.on('explosion', ({x, y, r}) => {
     AUD.explode();
   }
 });
+function drawDamageNumbers(ss) {
+  const now = Date.now();
+  const DUR = 800;
+  gctx.font = 'bold 16px "Press Start 2P", monospace';
+  gctx.textAlign = 'center';
+  for (let i = damageNumbers.length - 1; i >= 0; i--) {
+    const d = damageNumbers[i];
+    const age = now - d.t;
+    if (age > DUR) { damageNumbers.splice(i, 1); continue; }
+    const p = ss.players.find(pl => pl.id === d.id);
+    if (!p) continue;
+    const f = age / DUR;
+    const a = 1 - f;
+    const dx = (d.seed - 0.5) * 20;
+    const dy = -30 - f * 30;
+    const x = p.x - camX + dx;
+    const y = p.y - camY + dy;
+    gctx.fillStyle = `rgba(0,0,0,${a})`;
+    gctx.fillText('-' + d.dmg, x + 1, y + 1);
+    gctx.fillStyle = `rgba(255,90,90,${a})`;
+    gctx.fillText('-' + d.dmg, x, y);
+  }
+}
+
 function drawExplosions() {
   const now = Date.now();
   for (let i = explosions.length-1; i >= 0; i--) {
@@ -1606,6 +1630,8 @@ function render() {
     gctx.fillStyle = p.id===socket.id ? '#ffd24a' : '#fff';
     gctx.fillText(p.name.slice(0,8), px, py+48);
   }
+
+  drawDamageNumbers(ss);
 
   // crosshair
   gctx.strokeStyle='#ffd24a'; gctx.lineWidth=2;
