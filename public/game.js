@@ -1014,6 +1014,23 @@ function drawWater(ctx, x, y, w, h) {
   ctx.fillRect(x, y+h-2, w, 2); ctx.fillRect(x+w-2, y, 2, h);
 }
 
+const _sodaImg = new Image();
+_sodaImg.src = 'soda.png';
+function drawSoda(ctx, x, y) {
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath(); ctx.ellipse(x, y+10, 12, 4, 0, 0, Math.PI*2); ctx.fill();
+  if (_sodaImg.complete && _sodaImg.naturalWidth > 0) {
+    const sw = 22, sh = 28;
+    const bob = Math.sin(Date.now() / 350) * 1.5;
+    ctx.drawImage(_sodaImg, x - sw/2, y - sh/2 + bob, sw, sh);
+  } else {
+    ctx.fillStyle = '#c43030'; ctx.fillRect(x-6, y-10, 12, 20);
+    ctx.fillStyle = '#fff'; ctx.fillRect(x-6, y-2, 12, 4);
+  }
+  ctx.restore();
+}
+
 function drawRocketPickup(ctx, x, y) {
   // pixel rocket lying on ground
   ctx.save();
@@ -1242,6 +1259,9 @@ function render() {
   for (const h of ss.hearts) drawHeart(gctx, h.x-camX, h.y-camY);
   if (ss.rocketPickups) {
     for (const r of ss.rocketPickups) drawRocketPickup(gctx, r.x-camX, r.y-camY);
+  }
+  if (ss.sodas) {
+    for (const s of ss.sodas) drawSoda(gctx, s.x-camX, s.y-camY);
   }
 
   // bullets / rockets
