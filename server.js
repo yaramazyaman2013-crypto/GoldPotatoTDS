@@ -448,8 +448,8 @@ function startRound(room) {
     p.ammo = C.MAG_SIZE; p.reloading = false; p.reloadEndsAt = 0;
     p.rockets = (p.cls === 'cyber') ? C.CYBER_START_ROCKETS : 0;
     p.lastCyberRocketAt = now;
-    p.turretReadyAt = now + 30000; // 30sn warmup
-    p.petReadyAt = now + 30000;
+    p.turretReadyAt = now;
+    p.petReadyAt = now;
     p.tankUntil = 0; p.tankKills = 0;
   }
   for (let i = 0; i < 4; i++) spawnHeart(room);
