@@ -77,7 +77,7 @@ const C = {
   PYRO_FLAME_LIFE: 25,           // ~25 ticks * 13 speed = ~325px range
   PYRO_FLAME_DMG: 1,
   PYRO_HP_PER_LIFE: 12,          // pyro has more HP per life than others
-  PYRO_FUEL_MAX: 50,             // max fuel shots
+  PYRO_FUEL_MAX: 30,             // max fuel shots
   PYRO_REFUEL_MS: 2000,          // refuel time when empty
   // Sniper class
   SNIPER_DMG: 15,
