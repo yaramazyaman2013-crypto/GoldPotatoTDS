@@ -107,8 +107,10 @@ const AUD = {
     tick();
     this.musicTimer = setInterval(tick, interval);
   },
-  shoot() {
+  shoot(gainMul) {
     if (!this.ctx) return;
+    const gm = typeof gainMul === 'number' ? gainMul : 1;
+    if (gm <= 0.01) return;
     const t = this.ctx.currentTime;
     const buf = this.ctx.createBuffer(1, 3200, this.ctx.sampleRate);
     const d = buf.getChannelData(0);
@@ -116,14 +118,14 @@ const AUD = {
     const src = this.ctx.createBufferSource(); src.buffer = buf;
     const filter = this.ctx.createBiquadFilter();
     filter.type = 'bandpass'; filter.frequency.value = 1200; filter.Q.value = 0.8;
-    const g = this.ctx.createGain(); g.gain.value = 0.5;
+    const g = this.ctx.createGain(); g.gain.value = 0.5 * gm;
     src.connect(filter); filter.connect(g); g.connect(this.sfxGain);
     src.start(t);
     const osc = this.ctx.createOscillator();
     const og = this.ctx.createGain();
     osc.type = 'square'; osc.frequency.setValueAtTime(120, t);
     osc.frequency.exponentialRampToValueAtTime(40, t + 0.08);
-    og.gain.setValueAtTime(0.3, t);
+    og.gain.setValueAtTime(0.3 * gm, t);
     og.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
     osc.connect(og); og.connect(this.sfxGain);
     osc.start(t); osc.stop(t + 0.1);
@@ -322,17 +324,20 @@ function getRobotBody(color, withAntenna = true) {
 }
 
 // Pyro fire sound — loops while firing, stops ~300ms after last shot
-let _pyroFireAudio = null;
-let _pyroFireStopId = null;
-function _pyroFireTrigger() {
-  if (!_pyroFireAudio) {
-    _pyroFireAudio = new Audio('fire.mp3');
-    _pyroFireAudio.loop = true;
+const _pyroFireAudios = new Map(); // playerId → { audio, stopId }
+function _pyroFireTrigger(playerId, volMul) {
+  const vm = typeof volMul === 'number' ? volMul : 1;
+  if (vm <= 0.02) return;
+  let entry = _pyroFireAudios.get(playerId);
+  if (!entry) {
+    entry = { audio: new Audio('fire.mp3'), stopId: null };
+    entry.audio.loop = true;
+    _pyroFireAudios.set(playerId, entry);
   }
-  _pyroFireAudio.volume = Math.min(1, (AUD.volume || 0.5) * 0.125);
-  if (_pyroFireAudio.paused) _pyroFireAudio.play().catch(() => {});
-  clearTimeout(_pyroFireStopId);
-  _pyroFireStopId = setTimeout(() => { if (_pyroFireAudio) _pyroFireAudio.pause(); }, 320);
+  entry.audio.volume = Math.min(1, (AUD.volume || 0.5) * 0.125 * vm);
+  if (entry.audio.paused) entry.audio.play().catch(() => {});
+  clearTimeout(entry.stopId);
+  entry.stopId = setTimeout(() => { if (entry.audio) entry.audio.pause(); }, 320);
 }
 
 const _gunImg = new Image();
@@ -1119,6 +1124,7 @@ function getInterpState() {
 }
 
 let lastAmmo = null, wasReloading = false, lastRocketCount = 0;
+const _lastAmmoMap = new Map(); // playerId → last seen ammo
 const _lastHp = new Map();        // player id → last seen hp
 const damageNumbers = [];         // { id, dmg, t }
 socket.on('state', (s) => {
@@ -1148,17 +1154,31 @@ socket.on('state', (s) => {
   if (me) {
     if (state.cls === 'cyber' && me.rockets > lastRocketCount) state.cyberAnchor = Date.now();
     lastRocketCount = me.rockets;
-    if (lastAmmo !== null && me.ammo < lastAmmo) {
-      if (me.cls === 'pyro') {
-        _pyroFireTrigger();
+    if (me.reloading && !wasReloading) AUD.reload();
+    wasReloading = me.reloading;
+  }
+  // Per-player gunshot audio with distance-based volume falloff
+  for (const p of s.players) {
+    const prevA = _lastAmmoMap.get(p.id);
+    if (prevA !== undefined && typeof p.ammo === 'number' && p.ammo < prevA) {
+      let volMul = 1;
+      if (me && p.id !== me.id) {
+        const dx = p.x - me.x, dy = p.y - me.y;
+        const dist = Math.hypot(dx, dy);
+        const MAX_HEAR = 1200;
+        volMul = Math.max(0, 1 - dist / MAX_HEAR);
+        volMul = volMul * volMul; // quadratic falloff
+      }
+      if (p.cls === 'pyro') {
+        _pyroFireTrigger(p.id, volMul);
       } else {
-        const shots = lastAmmo - me.ammo;
-        for (let i = 0; i < shots; i++) AUD.shoot();
+        const shots = prevA - p.ammo;
+        for (let i = 0; i < shots; i++) AUD.shoot(volMul);
       }
     }
-    if (me.reloading && !wasReloading) AUD.reload();
-    lastAmmo = me.ammo; wasReloading = me.reloading;
+    if (typeof p.ammo === 'number') _lastAmmoMap.set(p.id, p.ammo);
   }
+  if (me) lastAmmo = me.ammo;
 });
 
 socket.on('heal', ({ id, amount }) => {
