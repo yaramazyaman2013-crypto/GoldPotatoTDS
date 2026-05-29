@@ -746,6 +746,9 @@ function tick(room) {
     }
   }
 
+  // Defensive cap: keep newest bullets if list ever explodes
+  if (room.bullets.length > 800) room.bullets.splice(0, room.bullets.length - 800);
+
   for (let i = room.bullets.length-1; i >= 0; i--) {
     const b = room.bullets[i];
     b.x += b.vx; b.y += b.vy; b.life--;
@@ -887,6 +890,11 @@ const socketRoom = new Map(); // socketId -> roomCode
 
 io.on('connection', (socket) => {
   console.log('[+]', socket.id);
+  const _rawOn = socket.on.bind(socket);
+  socket.on = (event, fn) => _rawOn(event, function safeWrap(...args) {
+    try { return fn.apply(this, args); }
+    catch (e) { console.error('socket handler error [' + event + ']', e); }
+  });
 
   socket.on('createRoom', ({name, color, cls, mapName, customMap, groundColor}, ack) => {
     leaveCurrentRoom(socket);
