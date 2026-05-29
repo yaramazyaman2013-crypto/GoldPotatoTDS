@@ -247,7 +247,7 @@ const state = {
 
 const CLASS_INFO = {
   cyber:    { label: 'CYBER',    desc: '1 füze ile başlar<br>Her 50sn: +3 füze (mavi)',    color: '#7afcff' },
-  engineer: { label: 'MUHENDIS', desc: '70sn: Taret koy (B)<br>25 mermi, 4.5sn reload',   color: '#4a8aff' },
+  engineer: { label: 'MUHENDIS', desc: '70sn: Taret koy (B)<br>35 mermi, 4.5sn reload',   color: '#4a8aff' },
   medic:    { label: 'DOKTOR',   desc: '65sn: Pet (V, 10sn ömür)<br>2.5dk: +1 can',       color: '#7ad24a' },
   tank:     { label: 'TANK',     desc: '3 kill: 30sn tank modu<br>25 HP, büyük, x2 hasar',color: '#ff5577' },
   pyro:     { label: 'PYRO',     desc: 'Alev silahı (50 yakıt)<br>Yakın mesafe, 2sn dolum', color: '#ff7a1a' },
