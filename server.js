@@ -843,7 +843,7 @@ function tick(room) {
 
   if (room.tickCount % C.BROADCAST_EVERY === 0) {
     io.to(room.code).emit('state', {
-      t: now, endsAt: room.roundEndsAt,
+      t: now, endsAt: room.roundEndsAt, msLeft: Math.max(0, room.roundEndsAt - now),
       players: [...room.players.values()].map(p => ({
         id:p.id, name:p.name, color:p.color, cls:p.cls, hat:p.hat, hatCfg:p.hatCfg,
         x:p.x, y:p.y, angle:p.angle,

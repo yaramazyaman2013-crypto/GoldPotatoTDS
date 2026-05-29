@@ -1109,6 +1109,11 @@ let lastAmmo = null, wasReloading = false, lastRocketCount = 0;
 const _lastHp = new Map();        // player id → last seen hp
 const damageNumbers = [];         // { id, dmg, t }
 socket.on('state', (s) => {
+  // Track server-client clock offset so absolute server timestamps stay accurate
+  if (typeof s.t === 'number') {
+    const off = s.t - Date.now();
+    state.serverTimeOffset = state.serverTimeOffset == null ? off : state.serverTimeOffset * 0.9 + off * 0.1;
+  }
   // Advance interpolation buffer; clear cached prevMap so it rebuilds next frame
   interpBuf.prev = interpBuf.cur;
   interpBuf.prevAt = interpBuf.curAt;
@@ -1180,8 +1185,15 @@ function renderHUD() {
   if (now - lastHUDAt < 100) return; // throttle DOM updates to ~10Hz
   lastHUDAt = now;
   const me = ss.players.find(p => p.id === socket.id);
-  // timer
-  const remaining = Math.max(0, state.endsAt - Date.now());
+  // timer — use msLeft if provided (clock-skew safe), else compensate with serverTimeOffset
+  let remaining;
+  if (typeof ss.msLeft === 'number') {
+    const drift = performance.now() - (interpBuf.curAt || performance.now());
+    remaining = Math.max(0, ss.msLeft - drift);
+  } else {
+    const off = state.serverTimeOffset || 0;
+    remaining = Math.max(0, state.endsAt - (Date.now() + off));
+  }
   const mm = Math.floor(remaining/60000);
   const sec = Math.floor((remaining%60000)/1000);
   $('timer').textContent = String(mm).padStart(2,'0')+':'+String(sec).padStart(2,'0');
