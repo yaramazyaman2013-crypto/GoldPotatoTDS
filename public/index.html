@@ -79,6 +79,13 @@
     <div id="lobbyMap" class="hint"></div>
     <div id="lobbyStatus" class="hint"></div>
     <div id="lobbyPlayers" class="lobby-players"></div>
+    <div id="lobbyChat" class="lobby-chat">
+      <div id="chatMessages" class="chat-messages"></div>
+      <div class="chat-row">
+        <input id="chatInput" maxlength="120" placeholder="mesaj yaz..." />
+        <button id="btnChatSend" class="pixel-btn small">GÖNDER</button>
+      </div>
+    </div>
     <button id="btnStart" class="pixel-btn hidden" data-i18n="start">BASLAT</button>
     <div id="waitMsg" class="hint" data-i18n="waitHost">Oda sahibinin baslatmasini bekle</div>
     <button id="btnLeave" class="pixel-btn small" data-i18n="leave">CIK</button>
@@ -144,6 +151,6 @@
 <audio id="bgMusic" src="music.mp3" loop preload="auto" style="display:none"></audio>
 <script src="supabase-config.js"></script>
 <script src="/socket.io/socket.io.js"></script>
-<script src="game.js?v=v39"></script>
+<script src="game.js?v=v40"></script>
 </body>
 </html>

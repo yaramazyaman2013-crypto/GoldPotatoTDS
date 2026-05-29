@@ -861,6 +861,7 @@ function renderLobby(room) {
 function enterLobby(roomId, ownerId) {
   state.roomId = roomId; state.ownerId = ownerId;
   $('lobbyCode').textContent = roomId;
+  const cm = $('chatMessages'); if (cm) cm.innerHTML = '';
   $('lobbyStatus').textContent = state.isHost
     ? 'Oda aktif. Kodu arkadaşına ver, sonra BASLAT.'
     : 'Lobiye bağlandın. Host başlatmasını bekle.';
@@ -873,6 +874,33 @@ $('btnLeave').addEventListener('click', () => {
   show('menu');
 });
 $('btnStart').addEventListener('click', () => socket.emit('startGame'));
+
+function _sendChat() {
+  const input = $('chatInput');
+  const text = (input.value || '').trim();
+  if (!text || !state.roomId) return;
+  socket.emit('lobbyChat', { text });
+  input.value = '';
+}
+$('btnChatSend').addEventListener('click', _sendChat);
+$('chatInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); _sendChat(); }
+});
+socket.on('lobbyChat', ({name, color, text}) => {
+  const box = $('chatMessages');
+  if (!box) return;
+  const div = document.createElement('div');
+  div.className = 'msg';
+  const who = document.createElement('span');
+  who.className = 'who';
+  who.style.color = color || '#ffd24a';
+  who.textContent = (name || '?') + ':';
+  div.appendChild(who);
+  div.appendChild(document.createTextNode(' ' + text));
+  box.appendChild(div);
+  while (box.children.length > 60) box.removeChild(box.firstChild);
+  box.scrollTop = box.scrollHeight;
+});
 
 let _pendingLobbyRoom = null;
 let _lobbyRaf = 0;
