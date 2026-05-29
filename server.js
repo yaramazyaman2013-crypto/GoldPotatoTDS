@@ -1114,6 +1114,20 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('lobbyChat', ({text}) => {
+    const code = socketRoom.get(socket.id);
+    const room = code && rooms.get(code);
+    if (!room) return;
+    const p = room.players.get(socket.id);
+    if (!p) return;
+    const now = Date.now();
+    if (p._lastChatAt && now - p._lastChatAt < 350) return; // rate limit
+    p._lastChatAt = now;
+    const msg = String(text || '').slice(0, 120).trim();
+    if (!msg) return;
+    io.to(room.code).emit('lobbyChat', { id: p.id, name: p.name, color: p.color, text: msg, t: now });
+  });
+
   socket.on('chatName', ({name}) => {
     const code = socketRoom.get(socket.id);
     const room = code && rooms.get(code);
