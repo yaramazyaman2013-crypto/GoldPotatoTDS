@@ -321,7 +321,7 @@ function newRoom(ownerSocketId, ownerName, ownerColor, ownerCls, mapName) {
     players: new Map(),
     bullets: [], hearts: [], rocketPickups: [], sodas: [],
     turrets: [], pets: [],
-    roundEndsAt: 0, lastHeartSpawn: 0, lastRocketSpawn: 0,
+    roundEndsAt: 0, remainingMs: 0, lastHeartSpawn: 0, lastRocketSpawn: 0,
     nextBulletId: 1, nextHeartId: 1, nextRocketId: 1,
     nextTurretId: 1, nextPetId: 1,
     tickHandle: null, pendingRestart: null,
@@ -456,6 +456,7 @@ function startRound(room) {
   room.bullets = []; room.hearts = []; room.rocketPickups = []; room.sodas = [];
   room.turrets = []; room.pets = [];
   room.roundEndsAt = Date.now() + C.ROUND_MS;
+  room.remainingMs = C.ROUND_MS;
   const now = Date.now();
   room.lastHeartSpawn = now;
   room.lastRocketSpawn = now;
@@ -508,7 +509,7 @@ function checkRoundOver(room) {
   const alive = [...room.players.values()].filter(p=>p.alive);
   if (alive.length <= 1 && room.players.size > 1) return endRound(room);
   if (alive.length === 0) return endRound(room);
-  if (Date.now() >= room.roundEndsAt) return endRound(room);
+  if (room.remainingMs <= 0) return endRound(room);
 }
 
 function tryMove(p, dx, dy, r) {
@@ -557,6 +558,8 @@ function tick(room) {
   if (!room.started) return;
   const now = Date.now();
   room.tickCount++;
+  // Tick-driven round timer: pauses naturally if tick skipped due to error
+  room.remainingMs = Math.max(0, room.remainingMs - C.TICK_MS);
 
   if (now - room.lastHeartSpawn >= C.HEART_SPAWN_MS) {
     spawnHeart(room); room.lastHeartSpawn = now;
@@ -848,7 +851,7 @@ function tick(room) {
 
   if (room.tickCount % C.BROADCAST_EVERY === 0) {
     io.to(room.code).emit('state', {
-      t: now, endsAt: room.roundEndsAt, msLeft: Math.max(0, room.roundEndsAt - now),
+      t: now, endsAt: room.roundEndsAt, msLeft: room.remainingMs,
       players: [...room.players.values()].map(p => ({
         id:p.id, name:p.name, color:p.color, cls:p.cls, hat:p.hat, hatCfg:p.hatCfg,
         x:p.x, y:p.y, angle:p.angle,
