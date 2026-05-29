@@ -794,7 +794,7 @@ $('btnCreateRoom').addEventListener('click', async () => {
       state.isHost = true;
       state.selfId = socket.id;
       enterLobby(res.roomId, res.ownerId);
-      if (state.hat) socket.emit('setHat', { hat: state.hat });
+      if (state.hat) socket.emit('setHat', { hat: state.hat, cfg: getHatCfg(state.hat) });
       if (res.room) renderLobby(res.room);
     } else {
       alert((res && res.error) || 'Bağlanılamadı');
@@ -818,7 +818,7 @@ function joinRoom(code) {
       state.isHost = false;
       state.selfId = res.selfId || socket.id;
       enterLobby(res.roomId, res.ownerId);
-      if (state.hat) socket.emit('setHat', { hat: state.hat });
+      if (state.hat) socket.emit('setHat', { hat: state.hat, cfg: getHatCfg(state.hat) });
       if (res.room) renderLobby(res.room);
     } else {
       alert((res && res.error) || 'Bağlanılamadı');
