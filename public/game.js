@@ -1207,18 +1207,22 @@ socket.on('state', (s) => {
     if (typeof p.ammo === 'number') _lastAmmoMap.set(p.id, p.ammo);
   }
   if (me) lastAmmo = me.ammo;
-  // Hygiene: drop tracking entries for players no longer in state
-  const ids = new Set(s.players.map(p => p.id));
-  for (const id of _lastAmmoMap.keys()) if (!ids.has(id)) _lastAmmoMap.delete(id);
-  for (const id of _pyroFireAudios.keys()) {
-    if (!ids.has(id)) {
-      const e = _pyroFireAudios.get(id);
-      try { e.audio.pause(); } catch {}
-      clearTimeout(e.stopId);
-      _pyroFireAudios.delete(id);
+  // Hygiene (every ~2s): drop tracking entries for players no longer in state
+  _hygieneCounter = (_hygieneCounter + 1) % 40;
+  if (_hygieneCounter === 0) {
+    const ids = new Set(s.players.map(p => p.id));
+    for (const id of _lastAmmoMap.keys()) if (!ids.has(id)) _lastAmmoMap.delete(id);
+    for (const id of _pyroFireAudios.keys()) {
+      if (!ids.has(id)) {
+        const e = _pyroFireAudios.get(id);
+        try { e.audio.pause(); } catch {}
+        clearTimeout(e.stopId);
+        _pyroFireAudios.delete(id);
+      }
     }
   }
 });
+let _hygieneCounter = 0;
 
 socket.on('heal', ({ id, amount }) => {
   if (!amount) return;

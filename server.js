@@ -51,7 +51,7 @@ const C = {
   MAG_SIZE: 30,
   RELOAD_MS: 1500,
   TICK_MS: 25,
-  BROADCAST_EVERY: 1,        // state broadcast every tick (~25ms)
+  BROADCAST_EVERY: 2,        // state broadcast every 2nd tick (~50ms = 20Hz)
   // Rocket
   ROCKET_SPAWN_MS: 35 * 1000,
   MAX_ROCKET_PICKUPS: 3,
@@ -893,11 +893,6 @@ const socketRoom = new Map(); // socketId -> roomCode
 
 io.on('connection', (socket) => {
   console.log('[+]', socket.id);
-  const _rawOn = socket.on.bind(socket);
-  socket.on = (event, fn) => _rawOn(event, function safeWrap(...args) {
-    try { return fn.apply(this, args); }
-    catch (e) { console.error('socket handler error [' + event + ']', e); }
-  });
 
   socket.on('createRoom', ({name, color, cls, mapName, customMap, groundColor}, ack) => {
     leaveCurrentRoom(socket);
@@ -977,6 +972,7 @@ io.on('connection', (socket) => {
   // Engineer commands their own turret to walk toward a point. The turret
   // doesn't teleport — its tick loop steps it toward (targetX, targetY).
   socket.on('moveTurret', ({x, y}) => {
+   try {
     const code = socketRoom.get(socket.id);
     const room = code && rooms.get(code);
     if (!room || !room.started) return;
@@ -991,6 +987,7 @@ io.on('connection', (socket) => {
     if (dx*dx + dy*dy > 260*260) return;
     if (hitsWallList(room.walls, tx, ty, 14)) return;
     for (const t of mine) { t.targetX = tx; t.targetY = ty; }
+   } catch (e) { console.error('moveTurret error', e); }
   });
 
   socket.on('placePet', () => {
@@ -1045,6 +1042,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('knifeSwing', () => {
+   try {
     const code = socketRoom.get(socket.id);
     const room = code && rooms.get(code);
     if (!room) return;
@@ -1055,18 +1053,20 @@ io.on('connection', (socket) => {
     p.knifeReadyAt = now + C.KNIFE_CD;
     io.to(room.code).emit('knifeFx', { x: p.x, y: p.y, angle: p.angle });
     const halfArc = C.KNIFE_ARC / 2;
+    const ang = Number.isFinite(p.angle) ? p.angle : 0;
     for (const target of room.players.values()) {
       if (!target.alive || target.id === p.id) continue;
       const dx = target.x - p.x, dy = target.y - p.y;
       const dist = Math.hypot(dx, dy);
       if (dist > C.KNIFE_RANGE + C.PLAYER_R) continue;
       const targetAng = Math.atan2(dy, dx);
-      let da = targetAng - p.angle;
-      while (da > Math.PI) da -= Math.PI * 2;
-      while (da < -Math.PI) da += Math.PI * 2;
+      let da = targetAng - ang;
+      // Normalize to [-PI, PI] without while-loops (guards against NaN/inf infinite loops)
+      da = ((da + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
       if (Math.abs(da) > halfArc) continue;
       applyDamage(room, target, C.KNIFE_DMG, p.id);
     }
+   } catch (e) { console.error('knifeSwing error', e); }
   });
 
   socket.on('reload', () => {
