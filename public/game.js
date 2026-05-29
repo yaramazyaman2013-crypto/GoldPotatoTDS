@@ -1189,7 +1189,8 @@ function renderHUD() {
   const hp = me ? Math.max(0, me.hp) : 0;
   const maxHp = me && me.maxHp ? me.maxHp : 10;
   $('hpfill').style.width = Math.min(100, hp/maxHp*100) + '%';
-  $('hptext').textContent = hp + ' / ' + maxHp;
+  const hpR = Math.round(hp * 10) / 10;
+  $('hptext').textContent = (Number.isInteger(hpR) ? hpR : hpR.toFixed(1)) + ' / ' + maxHp;
   // dead overlay
   $('dead').classList.toggle('hidden', !me || me.alive);
   // ammo (bullets) — rockets shown separately (right click)
@@ -1434,7 +1435,11 @@ function drawDamageNumbers(ss) {
     const x = p.x - camX + dx;
     const y = p.y - camY + dy;
     const isHeal = d.dmg < 0;
-    const text = isHeal ? '+' + (-d.dmg) : '-' + d.dmg;
+    const fmt = (n) => {
+      const r = Math.round(n * 10) / 10;
+      return Number.isInteger(r) ? String(r) : r.toFixed(1);
+    };
+    const text = isHeal ? '+' + fmt(-d.dmg) : '-' + fmt(d.dmg);
     const color = isHeal ? '90,255,130' : '255,90,90';
     gctx.fillStyle = `rgba(0,0,0,${a})`;
     gctx.fillText(text, x + 1, y + 1);
@@ -1770,8 +1775,8 @@ function render() {
         gctx.fillStyle = '#7ad24a'; gctx.fillRect(x-11, y-15, hpf, 4);
       }
       // countdown timer
-      if (pt.expiresAt) {
-        const secsLeft = Math.max(0, Math.ceil((pt.expiresAt - Date.now()) / 1000));
+      if (typeof pt.msLeft === 'number') {
+        const secsLeft = Math.max(0, Math.ceil(pt.msLeft / 1000));
         gctx.font = 'bold 9px "Press Start 2P", monospace';
         gctx.textAlign = 'center';
         gctx.fillStyle = 'rgba(0,0,0,0.7)';

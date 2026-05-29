@@ -72,7 +72,7 @@ const C = {
   // Pyro flame weapon
   PYRO_FLAME_CD: 90,             // ms between flame chunks
   PYRO_FLAME_SPEED: 13,
-  PYRO_FLAME_LIFE: 16,           // ~16 ticks * 13 speed = ~208px range
+  PYRO_FLAME_LIFE: 22,           // ~22 ticks * 13 speed = ~286px range
   PYRO_FLAME_DMG: 0.4,
   PYRO_HP_PER_LIFE: 12,          // pyro has more HP per life than others
   PYRO_FUEL_MAX: 50,             // max fuel shots
@@ -866,7 +866,7 @@ function tick(room) {
       rocketPickups: room.rocketPickups.map(r=>({x:r.x, y:r.y})),
       sodas:   room.sodas.map(s=>({x:s.x, y:s.y})),
       turrets: room.turrets.map(t=>({x:t.x, y:t.y, angle:t.angle||0, hp:t.hp, maxHp:C.TURRET_HP, owner:t.owner})),
-      pets:    room.pets.map(pt=>({x:pt.x, y:pt.y, hp:pt.hp, maxHp:C.PET_HP, expiresAt:pt.expiresAt, owner:pt.owner})),
+      pets:    room.pets.map(pt=>({x:pt.x, y:pt.y, hp:pt.hp, maxHp:C.PET_HP, msLeft: Math.max(0, pt.expiresAt - now), owner:pt.owner})),
     });
   }
   checkRoundOver(room);
