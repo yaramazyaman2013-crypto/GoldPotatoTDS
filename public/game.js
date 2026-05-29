@@ -388,8 +388,13 @@ function drawHat(ctx, name, size, cfgOverride) {
   const cx = r * cfg.ox;
   const cy = r * cfg.oy - hatH / 2;
   const rot = cfg.rot || 0;
+  const prevSmooth = ctx.imageSmoothingEnabled;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
   if (rot) {
     ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
     ctx.translate(cx, cy);
     ctx.rotate(rot);
     ctx.drawImage(img, -hatW / 2, -hatH / 2, hatW, hatH);
@@ -397,6 +402,7 @@ function drawHat(ctx, name, size, cfgOverride) {
   } else {
     ctx.drawImage(img, Math.round(cx - hatW / 2), Math.round(cy - hatH / 2), hatW, hatH);
   }
+  ctx.imageSmoothingEnabled = prevSmooth;
 }
 
 // Per-player roll state: tracks world position for smooth velocity
@@ -426,13 +432,15 @@ function drawRobotTopDown(ctx, x, y, color, angle, alive=true, id=null, wx=0, wy
     ctx.translate(0, -bob);
   }
   ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(getRobotBody(color, !hat), -_ROBOT_CX, -_ROBOT_CY);
-  ctx.imageSmoothingEnabled = false;
   if (hat) drawHat(ctx, hat, 36, hatCfg);
   // draw weapon rotated toward cursor
   const weaponImg = cls === 'pyro' ? _flameImg : (cls === 'sniper' ? _sniperImg : _gunImg);
   if (weaponImg.complete && weaponImg.naturalWidth > 0) {
     ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
     ctx.translate(0, 8);
     ctx.rotate(angle);
     if (cls === 'pyro') {
