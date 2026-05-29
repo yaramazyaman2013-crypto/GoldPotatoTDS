@@ -586,7 +586,7 @@ function tick(room) {
     }
     // Tank mode expiry
     const isTank = now < p.tankUntil;
-    const speedMul = isTank ? 0.7 : (p.cls === 'pyro' || p.cls === 'sniper' ? 1.5 : 1);
+    const speedMul = isTank ? 0.7 : (p.cls === 'pyro' ? 1.2 : (p.cls === 'sniper' ? 1.5 : 1));
     const playerR = isTank ? C.PLAYER_R + 12 : C.PLAYER_R;
 
     let dx = 0, dy = 0;
