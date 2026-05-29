@@ -1,6 +1,8 @@
 // Gold Wave — Socket.IO game server
 // Deploy to Railway (railway.app): connect GitHub repo → deploy.
 // npm install  →  npm start  →  everyone connects to the same URL.
+process.on('uncaughtException', (e) => console.error('uncaughtException', e));
+process.on('unhandledRejection', (e) => console.error('unhandledRejection', e));
 
 const express = require('express');
 const http    = require('http');
@@ -484,7 +486,7 @@ function startRound(room) {
     groundColor: room.groundColor || '#4a6a3a',
   });
   if (room.tickHandle) clearInterval(room.tickHandle);
-  room.tickHandle = setInterval(() => tick(room), C.TICK_MS);
+  room.tickHandle = setInterval(() => { try { tick(room); } catch(e) { console.error('tick error', e); } }, C.TICK_MS);
 }
 
 function endRound(room) {
