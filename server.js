@@ -79,7 +79,7 @@ const C = {
   PYRO_REFUEL_MS: 2000,          // refuel time when empty
   // Sniper class
   SNIPER_DMG: 15,
-  SNIPER_BULLET_SPEED: 28,
+  SNIPER_BULLET_SPEED: 34,
   SNIPER_BULLET_HIT_R: 7,        // larger hitbox to prevent tunneling at high speed
   SNIPER_BULLET_LIFE: 115,       // ~115 * 28 = 3220px (whole map)
   SNIPER_RELOAD_MS: 6000,
