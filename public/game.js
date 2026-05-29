@@ -1257,11 +1257,10 @@ function renderHUD() {
   if (now - lastHUDAt < 100) return; // throttle DOM updates to ~10Hz
   lastHUDAt = now;
   const me = ss.players.find(p => p.id === socket.id);
-  // timer — use msLeft if provided (clock-skew safe), else compensate with serverTimeOffset
+  // Timer follows server-driven remainingMs (pauses naturally if server tick is skipped/frozen)
   let remaining;
   if (typeof ss.msLeft === 'number') {
-    const drift = performance.now() - (interpBuf.curAt || performance.now());
-    remaining = Math.max(0, ss.msLeft - drift);
+    remaining = Math.max(0, ss.msLeft);
   } else {
     const off = state.serverTimeOffset || 0;
     remaining = Math.max(0, state.endsAt - (Date.now() + off));
