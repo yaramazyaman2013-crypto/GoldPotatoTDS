@@ -434,7 +434,12 @@ function drawRobotTopDown(ctx, x, y, color, angle, alive=true, id=null, wx=0, wy
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(getRobotBody(color, !hat), -_ROBOT_CX, -_ROBOT_CY);
-  if (hat) drawHat(ctx, hat, 36, hatCfg);
+  if (hat) {
+    // For other players: never use local localStorage cfg — use server hatCfg or plain default
+    const isLocalPlayer = id && id === (typeof socket !== 'undefined' ? socket.id : null);
+    const resolvedCfg = hatCfg || (isLocalPlayer ? null : ((hat && HAT_DEFAULTS[hat]) || HAT_DEFAULT));
+    drawHat(ctx, hat, 36, resolvedCfg);
+  }
   // draw weapon rotated toward cursor
   const weaponImg = cls === 'pyro' ? _flameImg : (cls === 'sniper' ? _sniperImg : _gunImg);
   if (weaponImg.complete && weaponImg.naturalWidth > 0) {
