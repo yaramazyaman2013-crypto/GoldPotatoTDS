@@ -398,11 +398,12 @@ canvas { image-rendering: pixelated; display: block; }
   padding: 6px 12px; color: #ff8090; font-size: 11px;
 }
 .ability-btn {
-  position: absolute; bottom: 80px; left: 50%; transform: translateX(-220px);
+  position: absolute; bottom: 80px; right: calc(50% + 175px); left: auto; transform: none;
   background: #2a1f44; color: #ffd24a;
   border: 3px solid #ffd24a; padding: 10px 14px;
   font-family: inherit; font-size: 10px; cursor: pointer;
   box-shadow: 4px 4px 0 #000; pointer-events: auto;
+  white-space: nowrap;
 }
 .ability-btn.ready { background: #ffd24a; color: #2a1a00; }
 
