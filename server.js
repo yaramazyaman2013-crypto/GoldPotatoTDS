@@ -96,7 +96,7 @@ const C = {
   SODA_HEAL:       3,
   SODA_SPAWN_CHANCE: 0.87,
   // Turret
-  TURRET_HP: 40,
+  TURRET_HP: 32,
   TURRET_MOVE_SPEED: 3.2,
   TURRET_RANGE: 460,
   TURRET_FIRE_CD: 120,
