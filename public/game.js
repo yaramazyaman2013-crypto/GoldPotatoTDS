@@ -1140,6 +1140,7 @@ socket.on('roundStart', (data) => {
   lastAmmo = null; wasReloading = false;
   $('dead').classList.add('hidden');
   $('roundEnd').classList.add('hidden');
+  $('perkModal').classList.add('hidden');
   // Imposter mode: store map metadata, toggle its HUD, hide FFA HUD bits
   const isImp = state.mode === 'imposter';
   $('hud').classList.toggle('hidden', isImp);
@@ -1319,8 +1320,41 @@ socket.on('levelUp', ({ id, level }) => {
   if (state.killfeed.length > 6) state.killfeed.pop();
 });
 
+// Survival: server offers 3 perks to choose from on level-up.
+socket.on('levelUpChoices', ({ choices, level }) => {
+  const modal = $('perkModal');
+  const cards = $('perkCards');
+  const lvlEl = $('perkLevel');
+  if (!modal || !cards) return;
+  if (lvlEl) lvlEl.textContent = level ? ('LV ' + level) : '';
+  cards.innerHTML = '';
+  (choices || []).forEach(c => {
+    const btn = document.createElement('button');
+    btn.className = 'perk-card';
+    btn.innerHTML = `<div class="perk-icon">${c.icon || '⭐'}</div>`
+      + `<div class="perk-name">${c.name}</div>`
+      + `<div class="perk-desc">${c.desc}</div>`;
+    btn.onclick = () => {
+      socket.emit('pickPerk', { id: c.id });
+      modal.classList.add('hidden');
+    };
+    cards.appendChild(btn);
+  });
+  modal.classList.remove('hidden');
+  if (AUD.ctx && !AUD.muted) {
+    const t = AUD.ctx.currentTime + 0.01;
+    [72, 76, 79].forEach((midi, i) => AUD.playNote(midi, t + i * 0.06, 0.18, 'square', AUD.sfxGain, 0.25));
+  }
+});
+
+// Survival: a player came back from the dead.
+socket.on('respawn', ({ id }) => {
+  if (id === socket.id) $('dead').classList.add('hidden');
+});
+
 socket.on('roundEnd', ({ board, winner, mode, survivalMs, winnerSide, roles }) => {
   state.inGame = false;
+  $('perkModal').classList.add('hidden');
   $('roundEnd').classList.remove('hidden');
   const d = I18N[currentLang];
   if (mode === 'imposter') {
@@ -1387,8 +1421,16 @@ function renderHUD() {
   $('hpfill').style.width = Math.min(100, hp/maxHp*100) + '%';
   const hpR = Math.round(hp * 10) / 10;
   $('hptext').textContent = (Number.isInteger(hpR) ? hpR : hpR.toFixed(1)) + ' / ' + maxHp;
-  // dead overlay
-  $('dead').classList.toggle('hidden', !me || me.alive);
+  // dead overlay (survival shows a respawn countdown instead of elimination)
+  const deadEl = $('dead');
+  if (me && !me.alive && ss.mode === 'survival') {
+    deadEl.classList.remove('hidden');
+    const secs = Math.ceil((me.respawnIn || 0) / 1000);
+    deadEl.textContent = secs > 0 ? ('OLDUN — ' + secs + 's sonra dirilis') : 'DIRILIYOR...';
+  } else {
+    deadEl.classList.toggle('hidden', !me || me.alive);
+    if (me && me.alive) deadEl.textContent = 'ELENDIN';
+  }
   // ammo (bullets) — rockets shown separately (right click)
   if (me) {
     if (me.cls === 'pyro') {

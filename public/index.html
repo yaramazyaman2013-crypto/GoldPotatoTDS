@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <title>Gold Wave</title>
-<link rel="stylesheet" href="style.css?v=v29" />
+<link rel="stylesheet" href="style.css?v=v30" />
 </head>
 <body>
 <!-- MAIN MENU -->
@@ -140,6 +140,15 @@
   </div>
   <div id="dead" class="dead hidden" data-i18n="eliminated">ELENDIN</div>
 
+  <!-- SURVIVAL LEVEL-UP PERK PICKER -->
+  <div id="perkModal" class="screen hidden overlay">
+    <div class="panel perk-panel">
+      <h2 class="title-sm">⭐ SEVIYE ATLADIN <span id="perkLevel"></span></h2>
+      <div class="hint">Bir gelistirme sec:</div>
+      <div id="perkCards" class="perk-cards"></div>
+    </div>
+  </div>
+
   <!-- IMPOSTER MODE UI -->
   <div id="impHud" class="hidden">
     <div id="impTaskBar"><div id="impTaskFill"></div><span id="impTaskTxt">Gorevler 0/0</span></div>
@@ -210,6 +219,6 @@
 <audio id="bgMusic" src="serenissima.mp3" loop preload="auto" style="display:none"></audio>
 <script src="supabase-config.js"></script>
 <script src="/socket.io/socket.io.js"></script>
-<script src="game.js?v=v43"></script>
+<script src="game.js?v=v44"></script>
 </body>
 </html>
