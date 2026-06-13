@@ -1351,6 +1351,14 @@ socket.on('levelUpChoices', ({ choices, level }) => {
 socket.on('respawn', ({ id }) => {
   if (id === socket.id) $('dead').classList.add('hidden');
 });
+// Survival: revival passive (Tiragisú) triggered.
+socket.on('revive', ({ id }) => {
+  if (id === socket.id) {
+    $('dead').classList.add('hidden');
+    state.killfeed.unshift({ note: '🍰 DIRILDIN!', t: Date.now() });
+    if (state.killfeed.length > 6) state.killfeed.pop();
+  }
+});
 
 // Survival: special pickup collected.
 socket.on('survItem', ({ type }) => {
@@ -1751,6 +1759,27 @@ function drawSurvItem(ctx, x, y, type) {
   ctx.restore();
 }
 
+// Breakable wooden crate (shows damage as it's shot)
+function drawCrate(ctx, x, y, frac) {
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.beginPath(); ctx.ellipse(x, y+13, 14, 4, 0, 0, Math.PI*2); ctx.fill();
+  const s = 14;
+  ctx.fillStyle = '#3a2410'; ctx.fillRect(x-s, y-s, s*2, s*2);
+  ctx.fillStyle = '#8a5a2a'; ctx.fillRect(x-s+2, y-s+2, s*2-4, s*2-4);
+  ctx.strokeStyle = '#5a3818'; ctx.lineWidth = 2;
+  ctx.strokeRect(x-s+2, y-s+2, s*2-4, s*2-4);
+  // diagonal planks
+  ctx.beginPath(); ctx.moveTo(x-s+2, y-s+2); ctx.lineTo(x+s-2, y+s-2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x+s-2, y-s+2); ctx.lineTo(x-s+2, y+s-2); ctx.stroke();
+  // cracks as it takes damage
+  if (frac < 0.66) { ctx.strokeStyle = '#2a1808'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(x-4, y-s+2); ctx.lineTo(x-1, y); ctx.lineTo(x-5, y+s-2); ctx.stroke(); }
+  if (frac < 0.34) {
+    ctx.beginPath(); ctx.moveTo(x+s-2, y-3); ctx.lineTo(x+2, y+1); ctx.lineTo(x+s-2, y+6); ctx.stroke(); }
+  ctx.restore();
+}
+
 // Survival monster: a chunky pixel zombie/ghost that pulses as it moves
 function drawMonster(ctx, x, y, m) {
   const t = Date.now() * 0.006;
@@ -2144,6 +2173,13 @@ function render() {
       const ix = it.x-camX, iy = it.y-camY;
       if (ix < -20 || iy < -20 || ix > W+20 || iy > H+20) continue;
       drawSurvItem(gctx, ix, iy, it.type);
+    }
+  }
+  if (ss.crates) {
+    for (const cr of ss.crates) {
+      const cx = cr.x-camX, cy = cr.y-camY;
+      if (cx < -24 || cy < -24 || cx > W+24 || cy > H+24) continue;
+      drawCrate(gctx, cx, cy, cr.hp/cr.maxHp);
     }
   }
   if (ss.monsters) {

@@ -123,6 +123,7 @@ const C = {
   SURV_RESPAWN_MS:      60 * 1000, // dead players come back after 60s
   SURV_ITEM_EVERY:      22 * 1000, // special pickup spawn interval
   SURV_BOSS_EVERY:      70 * 1000, // boss zombie interval
+  SURV_CRATE_EVERY:     15 * 1000, // breakable crate interval
   // Turret
   TURRET_HP: 32,
   TURRET_MOVE_SPEED: 3.2,
@@ -450,8 +451,8 @@ function newRoom(ownerSocketId, ownerName, ownerColor, ownerCls, mapName, mode) 
     walls: getMapWalls(mapName),
     players: new Map(),
     bullets: [], hearts: [], rocketPickups: [], sodas: [], powerups: [],
-    monsters: [], gems: [], survItems: [],
-    lastItemSpawn: 0, lastBossSpawn: 0, nextItemId: 1,
+    monsters: [], gems: [], survItems: [], crates: [],
+    lastItemSpawn: 0, lastBossSpawn: 0, lastCrateSpawn: 0, nextItemId: 1, nextCrateId: 1,
     turrets: [], pets: [],
     // Imposter mode
     phase: 'play', corpses: [], meeting: null, sabotage: null,
@@ -504,6 +505,7 @@ function addPlayer(room, id, name, color, cls) {
     pDmg: 1, pFire: 1, pSpeed: 1, pMaxHp: 0, pRegen: 0, pMagnet: 0, pXp: 1,
     pPierce: 0, pBulletSpeed: 1, pMulti: 0, pLifesteal: 0, pThorns: 0,
     pCrit: 0, pCritMul: 2, pBigBullet: 0, pExplode: 0, pKnock: 0,
+    pArmor: 0, pArea: 1, pDuration: 1, pLuck: 0, pCurse: 0, pRevive: 0,
     wAura: 0, wOrbit: 0, wLightning: 0, wMissile: 0,
     auraAt: 0, lightningAt: 0, missileAt: 0, orbitAngle: 0, auraR: 0, orbs: null,
     // Imposter mode
@@ -590,6 +592,13 @@ function resetPerks(p) {
   p.pMagnet = 0; p.pXp = 1; p.pPierce = 0; p.pBulletSpeed = 1; p.pMulti = 0;
   p.pLifesteal = 0; p.pThorns = 0; p.pCrit = 0; p.pCritMul = 2;
   p.pBigBullet = 0; p.pExplode = 0; p.pKnock = 0;
+  // Vampire-Survivors passive items
+  p.pArmor = 0;      // flat incoming damage reduction (capped)
+  p.pArea = 1;       // weapon area / size multiplier (Candelabrador)
+  p.pDuration = 1;   // buff duration multiplier (Spellbinder)
+  p.pLuck = 0;       // crit chance + better loot (Clover)
+  p.pCurse = 0;      // more & faster enemies, but more XP (Skull O'Maniac)
+  p.pRevive = 0;     // extra lives on death (Tiragisú)
   // Vampire-Survivors auto-weapons (level 0 = not owned)
   p.wAura = 0; p.wOrbit = 0; p.wLightning = 0; p.wMissile = 0;
   p.auraAt = 0; p.lightningAt = 0; p.missileAt = 0; p.orbitAngle = 0;
@@ -678,6 +687,19 @@ const PERKS = [
   { id:'light2', name:'Yıldırım+', desc:'Daha sık, sıçrayan yıldırım', icon:'⚡', apply:p=>p.wLightning+=1 },
   { id:'miss1', name:'Güdümlü Füze', desc:'Otomatik hedef bulan füze', icon:'🚀', apply:p=>p.wMissile+=1 },
   { id:'miss2', name:'Füze Salvosu', desc:'Daha sık güdümlü füze', icon:'🚀', apply:p=>p.wMissile+=1 },
+  // ---- Vampire-Survivors pasif eşyalar ----
+  { id:'armor1', name:'Zırh', desc:'Gelen hasarı azaltır (-2)', icon:'🛡️', apply:p=>p.pArmor+=2 },
+  { id:'armor2', name:'Plaka Zırh', desc:'Gelen hasarı azaltır (-3)', icon:'🛡️', apply:p=>p.pArmor+=3 },
+  { id:'area1', name:'Şamdan', desc:'+%20 silah alanı', icon:'🕯️', apply:p=>p.pArea*=1.2 },
+  { id:'area2', name:'Şamdan+', desc:'+%35 silah alanı', icon:'🕯️', apply:p=>p.pArea*=1.35 },
+  { id:'dur1', name:'Büyü Bağı', desc:'+%30 etki süresi', icon:'📜', apply:p=>p.pDuration*=1.3 },
+  { id:'luck1', name:'Yonca', desc:'+%12 kritik & daha iyi ganimet', icon:'🍀', apply:p=>{p.pLuck+=0.12;p.pCrit=Math.min(1,p.pCrit+0.05);} },
+  { id:'luck2', name:'Dört Yapraklı', desc:'+%20 şans', icon:'🍀', apply:p=>{p.pLuck+=0.2;p.pCrit=Math.min(1,p.pCrit+0.08);} },
+  { id:'curse1', name:'Lanet', desc:'Daha çok & hızlı düşman, +%50 XP', icon:'💀', apply:p=>{p.pCurse+=1;p.pXp*=1.5;} },
+  { id:'revive1', name:'Tiragisú', desc:'Öldüğünde 1 kez dirilirsin', icon:'🍰', apply:p=>p.pRevive+=1 },
+  { id:'wings1', name:'Kanatlar', desc:'+%15 hareket hızı', icon:'🪽', apply:p=>p.pSpeed*=1.15 },
+  { id:'tome1', name:'Boş Kitap', desc:'+%18 atış hızı (bekleme azalır)', icon:'📕', apply:p=>p.pFire*=0.82 },
+  { id:'spinach1', name:'Ispanak', desc:'+%10 hasar (Güç)', icon:'🥬', apply:p=>p.pDmg*=1.1 },
 ];
 
 function rollPerkChoices() {
@@ -736,14 +758,16 @@ function spawnMonster(room, diff) {
   }
   // Occasional tougher "elite" (bigger, more hp, more xp)
   const elite = diff.mins > 1 && Math.random() < 0.06;
+  const curse = diff.curse || 0;
+  const spd = (elite ? diff.speed * 0.8 : diff.speed) * (1 + curse * 0.08);
   room.monsters.push({
     id: room.nextMonsterId++, x, y,
     hp: elite ? diff.hp * 4 : diff.hp,
     maxHp: elite ? diff.hp * 4 : diff.hp,
-    speed: elite ? diff.speed * 0.8 : diff.speed,
+    speed: spd,
     dmg: elite ? diff.dmg * 2 : diff.dmg,
     r: elite ? C.SURV_MON_R + 7 : C.SURV_MON_R,
-    xp: elite ? 6 : C.SURV_MON_XP,
+    xp: (elite ? 6 : C.SURV_MON_XP) * (1 + curse),
     elite, nextHitAt: 0,
   });
 }
@@ -768,6 +792,43 @@ function spawnSurvItem(room) {
     y = Math.max(40, Math.min(MH-40, anchor.y + Math.sin(a)*dist));
   } while (hitsWallList(room.walls, x, y, 16) && --tries > 0);
   room.survItems.push({ id: room.nextItemId++, x, y, type });
+}
+
+// Breakable crate: a stationary box players can shoot to spill loot.
+function spawnCrate(room) {
+  const alive = [...room.players.values()].filter(p => p.alive);
+  if (!alive.length) return;
+  const anchor = alive[Math.floor(Math.random() * alive.length)];
+  const MW = room.mapW || C.MAP_W, MH = room.mapH || C.MAP_H;
+  let x, y, tries = 16;
+  do {
+    const a = Math.random() * Math.PI * 2;
+    const dist = 200 + Math.random() * 420;
+    x = Math.max(50, Math.min(MW-50, anchor.x + Math.cos(a)*dist));
+    y = Math.max(50, Math.min(MH-50, anchor.y + Math.sin(a)*dist));
+  } while (hitsWallList(room.walls, x, y, 18) && --tries > 0);
+  room.crates.push({ id: room.nextCrateId++, x, y, hp: 6, maxHp: 6 });
+}
+
+// Crate destroyed: spill XP gems and (luck-scaled) a bonus pickup.
+function breakCrate(room, crate, breaker) {
+  io.to(room.code).emit('explosion', { x: crate.x, y: crate.y, r: 36 });
+  const luck = breaker ? (breaker.pLuck || 0) : 0;
+  const gemN = 3 + Math.floor(Math.random() * 3);
+  for (let g = 0; g < gemN; g++) {
+    const a = Math.random() * Math.PI * 2, d = 8 + Math.random() * 22;
+    dropGem(room, crate.x + Math.cos(a)*d, crate.y + Math.sin(a)*d, 2);
+  }
+  // bonus chance improves with luck
+  if (Math.random() < 0.45 + luck) {
+    if (Math.random() < 0.5 && room.survItems.length < 4) {
+      const types = ['chicken', 'magnet', 'bomb'];
+      room.survItems.push({ id: room.nextItemId++, x: crate.x, y: crate.y, type: types[Math.floor(Math.random()*types.length)] });
+    } else {
+      const types = C.POWERUP_TYPES;
+      room.powerups.push({ id: room.nextPowerupId++, x: crate.x, y: crate.y, type: types[Math.floor(Math.random()*types.length)] });
+    }
+  }
 }
 
 // Boss zombie: huge, tanky, drops a burst of XP gems on death.
@@ -798,7 +859,8 @@ function outgoingDmg(room, ownerId, baseDmg) {
     if (Date.now() < killer.dmgUntil) dmg *= C.DAMAGE_BUFF_MUL;
     if (room.mode === 'survival') {
       dmg *= (killer.pDmg || 1);
-      if (killer.pCrit && Math.random() < killer.pCrit) dmg *= (killer.pCritMul || 2);
+      const critChance = (killer.pCrit || 0) + (killer.pLuck || 0) * 0.5;
+      if (critChance > 0 && Math.random() < critChance) dmg *= (killer.pCritMul || 2);
     }
   }
   return Math.max(1, Math.ceil(dmg));
@@ -903,8 +965,9 @@ function startRound(room) {
   }
   room.bullets = []; room.hearts = []; room.rocketPickups = []; room.sodas = [];
   room.powerups = [];
-  room.monsters = []; room.gems = []; room.survItems = [];
-  room.lastItemSpawn = Date.now(); room.lastBossSpawn = Date.now(); room.nextItemId = 1;
+  room.monsters = []; room.gems = []; room.survItems = []; room.crates = [];
+  room.lastItemSpawn = Date.now(); room.lastBossSpawn = Date.now(); room.lastCrateSpawn = Date.now();
+  room.nextItemId = 1; room.nextCrateId = 1;
   room.turrets = []; room.pets = [];
   room.roundEndsAt = Date.now() + C.ROUND_MS;
   room.remainingMs = C.ROUND_MS;
@@ -1267,8 +1330,8 @@ function survFire(room, p, base) {
       vx: Math.cos(a) * spd, vy: Math.sin(a) * spd,
       angle: a, life: base.life,
       pierce: surv ? (p.pPierce || 0) : 0,
-      rExtra: surv ? (p.pBigBullet || 0) : 0,
-      explode: surv ? (p.pExplode || 0) : 0,
+      rExtra: surv ? (p.pBigBullet || 0) * (p.pArea || 1) : 0,
+      explode: surv ? (p.pExplode || 0) * (p.pArea || 1) : 0,
       knock: surv ? (p.pKnock || 0) : 0,
     });
   }
@@ -1277,10 +1340,11 @@ function survFire(room, p, base) {
 // Vampire-Survivors auto-weapons that fire on their own each tick.
 function survWeapons(room, p, now) {
   const dmgMul = p.pDmg || 1;
+  const area = p.pArea || 1;
   const ms = room.monsters;
   // Garlic aura: damages everything in a growing radius on an interval.
   if (p.wAura > 0) {
-    p.auraR = 70 + p.wAura * 28;
+    p.auraR = (70 + p.wAura * 28) * area;
     if (now - (p.auraAt || 0) >= 600) {
       p.auraAt = now;
       const dmg = Math.ceil((1 + p.wAura) * dmgMul);
@@ -1294,7 +1358,7 @@ function survWeapons(room, p, now) {
   if (p.wOrbit > 0) {
     p.orbitAngle = (p.orbitAngle || 0) + 0.07;
     const count = p.wOrbit + 1;
-    const R = 66;
+    const R = 66 * area;
     const orbDmg = Math.ceil((2 + p.wOrbit) * dmgMul);
     p.orbs = [];
     for (let k = 0; k < count; k++) {
@@ -1352,6 +1416,10 @@ function applyDamage(room, victim, dmg, killerId) {
   if (killerD && killerD !== victim && nowD < killerD.dmgUntil) {
     dmg = Math.ceil(dmg * C.DAMAGE_BUFF_MUL);
   }
+  // Armor passive (survival): reduce incoming damage, but never below 25%.
+  if (room.mode === 'survival' && victim.pArmor) {
+    dmg = Math.max(Math.ceil(dmg * 0.25), dmg - victim.pArmor);
+  }
   victim.hp -= dmg;
   if (victim.hp <= 0) {
     victim.lives--;
@@ -1370,9 +1438,18 @@ function applyDamage(room, victim, dmg, killerId) {
     }
     io.to(room.code).emit('kill', {killer: killer ? killer.name : (room.mode === 'survival' ? '🧟' : '?'), victim: victim.name});
     if (victim.lives <= 0) {
-      victim.alive = false;
-      // Survival: come back after a delay instead of being eliminated.
-      if (room.mode === 'survival') victim.respawnAt = Date.now() + C.SURV_RESPAWN_MS;
+      // Revival passive (Tiragisú): consume a charge to get back up instantly.
+      if (room.mode === 'survival' && victim.pRevive > 0) {
+        victim.pRevive--;
+        victim.lives = C.START_LIVES;
+        victim.hp = maxHpFor(victim, Date.now());
+        const sp = randomSpawnIn(room.walls); victim.x = sp.x; victim.y = sp.y;
+        io.to(room.code).emit('revive', { id: victim.id });
+      } else {
+        victim.alive = false;
+        // Survival: come back after a delay instead of being eliminated.
+        if (room.mode === 'survival') victim.respawnAt = Date.now() + C.SURV_RESPAWN_MS;
+      }
     }
     else {
       const s = randomSpawnIn(room.walls);
@@ -1410,9 +1487,13 @@ function tick(room) {
   let survDiff = null;
   if (room.mode === 'survival') {
     survDiff = survDifficulty(room, now);
+    // Curse passive: the most-cursed living player adds enemies & speed.
+    let curse = 0;
+    for (const pl of room.players.values()) if (pl.alive && pl.pCurse > curse) curse = pl.pCurse;
+    survDiff.curse = curse;
     if (now - room.lastMonsterSpawn >= survDiff.interval) {
       const alivePlayers = [...room.players.values()].filter(p => p.alive).length || 1;
-      const n = survDiff.batch + (alivePlayers - 1);
+      const n = survDiff.batch + (alivePlayers - 1) + curse;
       for (let i = 0; i < n; i++) spawnMonster(room, survDiff);
       room.lastMonsterSpawn = now;
     }
@@ -1422,6 +1503,10 @@ function tick(room) {
     }
     if (now - (room.lastBossSpawn||0) >= C.SURV_BOSS_EVERY) {
       spawnBoss(room, survDiff); room.lastBossSpawn = now;
+    }
+    if (now - (room.lastCrateSpawn||0) >= C.SURV_CRATE_EVERY) {
+      if (room.crates.length < 5) spawnCrate(room);
+      room.lastCrateSpawn = now;
     }
   }
 
@@ -1533,9 +1618,10 @@ function tick(room) {
       const pu = room.powerups[i];
       magnetTo(p, pu);
       if ((pu.x-p.x)**2+(pu.y-p.y)**2 < (C.PLAYER_R+12)**2) {
-        if (pu.type === 'speed')       p.speedUntil  = now + C.SPEED_BUFF_MS;
-        else if (pu.type === 'damage') p.dmgUntil    = now + C.DAMAGE_BUFF_MS;
-        else if (pu.type === 'shield') p.shieldUntil = now + C.SHIELD_BUFF_MS;
+        const dur = room.mode === 'survival' ? (p.pDuration || 1) : 1;
+        if (pu.type === 'speed')       p.speedUntil  = now + C.SPEED_BUFF_MS * dur;
+        else if (pu.type === 'damage') p.dmgUntil    = now + C.DAMAGE_BUFF_MS * dur;
+        else if (pu.type === 'shield') p.shieldUntil = now + C.SHIELD_BUFF_MS * dur;
         io.to(room.code).emit('powerup', { id: p.id, type: pu.type });
         room.powerups.splice(i, 1);
       }
@@ -1805,6 +1891,19 @@ function tick(room) {
           }
         }
         if (hitSomething) continue;
+        // bullets break crates
+        for (let ci = room.crates.length-1; ci >= 0; ci--) {
+          const cr = room.crates[ci];
+          if ((cr.x-b.x)**2+(cr.y-b.y)**2 < (16 + r)**2) {
+            if (isRocket) { detonated = true; break; }
+            cr.hp -= outgoingDmg(room, b.owner, b.dmg || 1);
+            if (cr.hp <= 0) { room.crates.splice(ci, 1); breakCrate(room, cr, room.players.get(b.owner)); }
+            if (b.pierce > 0) { b.pierce--; }
+            else { room.bullets.splice(i,1); hitSomething = true; }
+            break;
+          }
+        }
+        if (hitSomething) continue;
       }
       // hit players (PvP disabled in survival)
       if (room.mode !== 'survival') for (const p of room.players.values()) {
@@ -1922,6 +2021,7 @@ function tick(room) {
       monsters: room.monsters.map(m=>({id:m.id, x:m.x, y:m.y, hp:m.hp, maxHp:m.maxHp, r:m.r, elite:m.elite, boss:m.boss})),
       gems: room.gems.map(g=>({x:g.x, y:g.y, val:g.val})),
       survItems: room.survItems.map(it=>({x:it.x, y:it.y, type:it.type})),
+      crates: room.crates.map(cr=>({x:cr.x, y:cr.y, hp:cr.hp, maxHp:cr.maxHp})),
       turrets: room.turrets.map(t=>({x:t.x, y:t.y, angle:t.angle||0, hp:t.hp, maxHp:C.TURRET_HP, owner:t.owner})),
       pets:    room.pets.map(pt=>({x:pt.x, y:pt.y, hp:pt.hp, maxHp:C.PET_HP, msLeft: Math.max(0, pt.expiresAt - now), owner:pt.owner})),
     });
