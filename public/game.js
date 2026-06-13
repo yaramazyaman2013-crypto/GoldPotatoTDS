@@ -238,6 +238,7 @@ const state = {
   cls: localStorage.getItem('gwClass') || 'cyber',
   hat: localStorage.getItem('gwHat') || '',
   mapName: 'default',
+  mode: 'ffa',
   roomId: null, ownerId: null, selfId: null,
   isHost: false,
   inLobby: false, inGame: false,
@@ -782,11 +783,25 @@ function setConnecting(v) {
   $('btnJoinCode').disabled = v;
 }
 
+// Game mode selector (rooms screen)
+const MODE_HINTS = {
+  ffa: 'Son kalan kazanir. Oyuncular birbirine ates eder.',
+  survival: 'Co-op: sonsuz canavar dalgalarina karsi birlikte hayatta kal. Canavar oldur, XP topla, seviye atla.',
+};
+document.querySelectorAll('.mode-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    state.mode = btn.dataset.mode;
+    document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('selected', b === btn));
+    const mh = $('modeHint');
+    if (mh) mh.textContent = MODE_HINTS[state.mode] || '';
+  });
+});
+
 $('btnCreateRoom').addEventListener('click', async () => {
   if (connecting) return;
   setConnecting(true);
   setNetStatus(I18N[currentLang].connecting);
-  const payload = { name: state.name, color: state.color, cls: state.cls, mapName: state.mapName };
+  const payload = { name: state.name, color: state.color, cls: state.cls, mapName: state.mapName, mode: state.mode };
   // Custom map: fetch walls from Supabase and ship them inline so server knows them
   if (state.mapName && state.mapName !== 'default') {
     try {
@@ -855,7 +870,10 @@ function renderLobby(room) {
   $('btnStart').classList.toggle('hidden', !isHost);
   $('waitMsg').classList.toggle('hidden', isHost);
   const mapEl = $('lobbyMap');
-  if (mapEl) mapEl.textContent = 'Harita: ' + (room.mapName || 'default');
+  if (mapEl) {
+    const modeLabel = room.mode === 'survival' ? 'HAYATTA KALMA 🧟' : 'HERKESE KARSI';
+    mapEl.textContent = 'Mod: ' + modeLabel + '  •  Harita: ' + (room.mapName || 'default');
+  }
 }
 
 function enterLobby(roomId, ownerId) {
@@ -1089,6 +1107,7 @@ socket.on('roundStart', (data) => {
   state.walls = data.walls;
   state.mapW = data.mapW; state.mapH = data.mapH;
   state.groundColor = data.groundColor || '#4a6a3a';
+  state.mode = data.mode || 'ffa';
   state.endsAt = data.endsAt;
   state.inGame = true; state.killfeed = [];
   state.cyberAnchor = Date.now();
@@ -1229,24 +1248,64 @@ socket.on('heal', ({ id, amount }) => {
   damageNumbers.push({ id, dmg: -amount, t: Date.now(), seed: Math.random() });
 });
 
+socket.on('powerup', ({ id, type }) => {
+  // Rising 3-note arpeggio when anyone grabs a power-up (louder for self).
+  if (AUD.ctx && !AUD.muted) {
+    const t = AUD.ctx.currentTime + 0.01;
+    const self = id === socket.id;
+    const base = type === 'damage' ? 60 : (type === 'shield' ? 64 : 67);
+    const gain = self ? 0.28 : 0.12;
+    [0, 4, 7].forEach((semi, i) => {
+      AUD.playNote(base + semi, t + i * 0.06, 0.18, 'square', AUD.sfxGain, gain);
+    });
+  }
+  if (id === socket.id) {
+    const label = type === 'speed' ? '⚡ HIZ' : (type === 'damage' ? '⨯2 HASAR' : '🛡 KALKAN');
+    state.killfeed.unshift({ killer: '', victim: '', t: Date.now(), note: label });
+    if (state.killfeed.length > 6) state.killfeed.pop();
+  }
+});
+
 socket.on('kill', ({ killer, victim }) => {
   state.killfeed.unshift({ killer, victim, t: Date.now() });
   if (state.killfeed.length > 6) state.killfeed.pop();
 });
 
-socket.on('roundEnd', ({ board, winner }) => {
+socket.on('levelUp', ({ id, level }) => {
+  if (id !== socket.id) return;
+  if (AUD.ctx && !AUD.muted) {
+    const t = AUD.ctx.currentTime + 0.01;
+    [60, 64, 67, 72].forEach((midi, i) => {
+      AUD.playNote(midi, t + i * 0.07, 0.2, 'square', AUD.sfxGain, 0.3);
+    });
+  }
+  state.killfeed.unshift({ note: '⭐ SEVIYE ' + level, t: Date.now() });
+  if (state.killfeed.length > 6) state.killfeed.pop();
+});
+
+socket.on('roundEnd', ({ board, winner, mode, survivalMs }) => {
   state.inGame = false;
   $('roundEnd').classList.remove('hidden');
   const d = I18N[currentLang];
-  $('winnerLine').textContent = winner
-    ? `${d.winner}: ${winner.name} (${winner.kills} ${d.kills})`
-    : d.noWinner;
+  if (mode === 'survival') {
+    const mm = Math.floor((survivalMs||0)/60000);
+    const sec = Math.floor(((survivalMs||0)%60000)/1000);
+    const totalKills = board.reduce((s, p) => s + (p.kills||0), 0);
+    $('winnerLine').textContent = `Hayatta kalinan sure: ${String(mm).padStart(2,'0')}:${String(sec).padStart(2,'0')}  •  ${totalKills} canavar`;
+  } else {
+    $('winnerLine').textContent = winner
+      ? `${d.winner}: ${winner.name} (${winner.kills} ${d.kills})`
+      : d.noWinner;
+  }
   const fb = $('finalBoard');
   fb.innerHTML = '';
   board.forEach(p => {
     const div = document.createElement('div');
     div.className = 'row';
-    div.innerHTML = `<span style="color:${p.color}">${p.name}</span><span>${p.kills} ${d.kills}</span>`;
+    const stat = mode === 'survival'
+      ? `${p.kills} canavar · LV${p.level||1}`
+      : `${p.kills} ${d.kills}`;
+    div.innerHTML = `<span style="color:${p.color}">${p.name}</span><span>${stat}</span>`;
     fb.appendChild(div);
   });
 });
@@ -1261,16 +1320,18 @@ function renderHUD() {
   if (now - lastHUDAt < 100) return; // throttle DOM updates to ~10Hz
   lastHUDAt = now;
   const me = ss.players.find(p => p.id === socket.id);
-  // Timer follows server-driven remainingMs (pauses naturally if server tick is skipped/frozen)
-  let remaining;
-  if (typeof ss.msLeft === 'number') {
-    remaining = Math.max(0, ss.msLeft);
+  // Timer: survival counts UP (time survived); FFA counts DOWN (round time left)
+  let shown;
+  if (ss.mode === 'survival') {
+    shown = Math.max(0, ss.survivalMs || 0);
+  } else if (typeof ss.msLeft === 'number') {
+    shown = Math.max(0, ss.msLeft);
   } else {
     const off = state.serverTimeOffset || 0;
-    remaining = Math.max(0, state.endsAt - (Date.now() + off));
+    shown = Math.max(0, state.endsAt - (Date.now() + off));
   }
-  const mm = Math.floor(remaining/60000);
-  const sec = Math.floor((remaining%60000)/1000);
+  const mm = Math.floor(shown/60000);
+  const sec = Math.floor((shown%60000)/1000);
   $('timer').textContent = String(mm).padStart(2,'0')+':'+String(sec).padStart(2,'0');
   // hp bar (current life HP)
   const hp = me ? Math.max(0, me.hp) : 0;
@@ -1347,7 +1408,7 @@ function renderHUD() {
     kf.innerHTML = '';
     state.killfeed.forEach(k => {
       const d = document.createElement('div');
-      d.textContent = `${k.killer} > ${k.victim}`;
+      d.textContent = k.note ? k.note : `${k.killer} > ${k.victim}`;
       kf.appendChild(d);
     });
   }
@@ -1451,6 +1512,106 @@ function drawSoda(ctx, x, y) {
   } else {
     ctx.fillStyle = '#c43030'; ctx.fillRect(x-6, y-10, 12, 20);
     ctx.fillStyle = '#fff'; ctx.fillRect(x-6, y-2, 12, 4);
+  }
+  ctx.restore();
+}
+
+// Power-up visual config: color + a simple pixel glyph drawn on a floating orb.
+const POWERUP_STYLE = {
+  speed:  { color: '#34d6ff', glow: '#0090d0' },
+  damage: { color: '#ff5a3c', glow: '#c02000' },
+  shield: { color: '#5aa0ff', glow: '#2050c0' },
+};
+function drawPowerup(ctx, x, y, type) {
+  const st = POWERUP_STYLE[type] || POWERUP_STYLE.speed;
+  const bob = Math.sin(Date.now() / 300) * 2;
+  const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 200);
+  ctx.save();
+  // ground shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath(); ctx.ellipse(x, y+11, 11, 4, 0, 0, Math.PI*2); ctx.fill();
+  const cy = y + bob;
+  // outer glow ring
+  ctx.globalAlpha = 0.25 + pulse * 0.25;
+  ctx.fillStyle = st.glow;
+  ctx.beginPath(); ctx.arc(x, cy, 15 + pulse * 3, 0, Math.PI*2); ctx.fill();
+  // orb body
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#11131c';
+  ctx.beginPath(); ctx.arc(x, cy, 11, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = st.color;
+  ctx.beginPath(); ctx.arc(x, cy, 9, 0, Math.PI*2); ctx.fill();
+  // glyph
+  ctx.fillStyle = '#0a0a12';
+  if (type === 'speed') {
+    // lightning bolt
+    ctx.beginPath();
+    ctx.moveTo(x+1, cy-6); ctx.lineTo(x-4, cy+1); ctx.lineTo(x-1, cy+1);
+    ctx.lineTo(x-1, cy+6); ctx.lineTo(x+4, cy-1); ctx.lineTo(x+1, cy-1);
+    ctx.closePath(); ctx.fill();
+  } else if (type === 'damage') {
+    // up-arrow (power)
+    ctx.beginPath();
+    ctx.moveTo(x, cy-6); ctx.lineTo(x+5, cy+1); ctx.lineTo(x+2, cy+1);
+    ctx.lineTo(x+2, cy+6); ctx.lineTo(x-2, cy+6); ctx.lineTo(x-2, cy+1);
+    ctx.lineTo(x-5, cy+1); ctx.closePath(); ctx.fill();
+  } else {
+    // shield outline
+    ctx.beginPath();
+    ctx.moveTo(x, cy-6); ctx.lineTo(x+5, cy-4); ctx.lineTo(x+5, cy+1);
+    ctx.quadraticCurveTo(x+5, cy+5, x, cy+7);
+    ctx.quadraticCurveTo(x-5, cy+5, x-5, cy+1);
+    ctx.lineTo(x-5, cy-4); ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+}
+
+// XP gem dropped by monsters (small glowing diamond)
+function drawGem(ctx, x, y) {
+  const t = Date.now() * 0.004;
+  const pulse = 0.6 + 0.4 * Math.sin(t + (x + y) * 0.05);
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.globalAlpha = 0.4 + pulse * 0.3;
+  ctx.fillStyle = '#aef542';
+  ctx.beginPath(); ctx.arc(0, 0, 6, 0, Math.PI*2); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#5ec800';
+  ctx.beginPath();
+  ctx.moveTo(0, -5); ctx.lineTo(4, 0); ctx.lineTo(0, 5); ctx.lineTo(-4, 0);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#dfffa0';
+  ctx.fillRect(-1, -3, 2, 2);
+  ctx.restore();
+}
+
+// Survival monster: a chunky pixel zombie/ghost that pulses as it moves
+function drawMonster(ctx, x, y, m) {
+  const t = Date.now() * 0.006;
+  const wob = Math.sin(t + (m.id || 0)) * 1.5;
+  const r = m.r || 12;
+  ctx.save();
+  ctx.translate(x, y + wob);
+  // shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.beginPath(); ctx.ellipse(0, r - 1 - wob, r*0.8, 3, 0, 0, Math.PI*2); ctx.fill();
+  // body
+  const body = m.elite ? '#b02030' : '#5a7d3a';
+  const dark = m.elite ? '#6a1018' : '#37501f';
+  ctx.fillStyle = dark;
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = body;
+  ctx.beginPath(); ctx.arc(0, -1, r - 2, 0, Math.PI*2); ctx.fill();
+  // eyes
+  ctx.fillStyle = m.elite ? '#ffd24a' : '#ff3030';
+  const ew = Math.max(2, r*0.22);
+  ctx.fillRect(-r*0.4, -r*0.25, ew, ew);
+  ctx.fillRect(r*0.4 - ew, -r*0.25, ew, ew);
+  // hp bar if hurt
+  if (m.hp < m.maxHp) {
+    const bw = r*2, bf = Math.max(0, m.hp/m.maxHp) * bw;
+    ctx.fillStyle = '#000'; ctx.fillRect(-r, -r-7, bw, 3);
+    ctx.fillStyle = m.elite ? '#ffcf3a' : '#9ce04a'; ctx.fillRect(-r, -r-7, bf, 3);
   }
   ctx.restore();
 }
@@ -1778,6 +1939,24 @@ function render() {
   if (ss.sodas) {
     for (const s of ss.sodas) drawSoda(gctx, s.x-camX, s.y-camY);
   }
+  if (ss.powerups) {
+    for (const pu of ss.powerups) drawPowerup(gctx, pu.x-camX, pu.y-camY, pu.type);
+  }
+  // survival: XP gems (ground) + monsters
+  if (ss.gems) {
+    for (const g of ss.gems) {
+      const gx = g.x-camX, gy = g.y-camY;
+      if (gx < -10 || gy < -10 || gx > W+10 || gy > H+10) continue;
+      drawGem(gctx, gx, gy);
+    }
+  }
+  if (ss.monsters) {
+    for (const m of ss.monsters) {
+      const mx = m.x-camX, my = m.y-camY;
+      if (mx < -30 || my < -30 || mx > W+30 || my > H+30) continue;
+      drawMonster(gctx, mx, my, m);
+    }
+  }
 
   // bullets / rockets
   for (const b of ss.bullets) {
@@ -1921,6 +2100,22 @@ function render() {
       gctx.fillStyle = `rgba(255,80,90,${tankAlpha})`;
       gctx.beginPath(); gctx.arc(px, py, 36, 0, Math.PI*2); gctx.fill();
     }
+    // Power-up auras (ring around buffed players)
+    if (p.shieldMs > 0) {
+      const a = 0.5 + 0.4 * Math.sin(Date.now()/140);
+      gctx.strokeStyle = `rgba(90,160,255,${a})`;
+      gctx.lineWidth = 3;
+      gctx.beginPath(); gctx.arc(px, py, 24, 0, Math.PI*2); gctx.stroke();
+    }
+    if (p.dmgMs > 0) {
+      gctx.fillStyle = `rgba(255,90,60,${tankPulse*0.22})`;
+      gctx.beginPath(); gctx.arc(px, py, 22, 0, Math.PI*2); gctx.fill();
+    }
+    if (p.speedMs > 0) {
+      gctx.strokeStyle = `rgba(52,214,255,${0.4+0.3*tankPulse})`;
+      gctx.lineWidth = 2;
+      gctx.beginPath(); gctx.arc(px, py, 20, 0, Math.PI*2); gctx.stroke();
+    }
     if (p.tank) {
       gctx.save();
       gctx.translate(px, py);
@@ -1942,6 +2137,44 @@ function render() {
   }
 
   drawDamageNumbers(ss);
+
+  // Active power-up buffs for the local player (bottom-left badges)
+  const meBuff = ss.players.find(p => p.id === socket.id);
+  if (meBuff) {
+    const buffs = [];
+    if (meBuff.speedMs  > 0) buffs.push({ c: '#34d6ff', t: '⚡', ms: meBuff.speedMs });
+    if (meBuff.dmgMs    > 0) buffs.push({ c: '#ff5a3c', t: '⨯2', ms: meBuff.dmgMs });
+    if (meBuff.shieldMs > 0) buffs.push({ c: '#5aa0ff', t: '🛡', ms: meBuff.shieldMs });
+    let bx = 16, by = H - 60;
+    gctx.textAlign = 'left';
+    gctx.font = '12px "Press Start 2P",monospace';
+    for (const b of buffs) {
+      gctx.fillStyle = 'rgba(0,0,0,0.55)';
+      gctx.fillRect(bx, by, 74, 22);
+      gctx.fillStyle = b.c;
+      gctx.fillRect(bx, by, 4, 22);
+      gctx.fillText(b.t + ' ' + Math.ceil(b.ms/1000) + 's', bx + 10, by + 16);
+      by -= 28;
+    }
+    gctx.textAlign = 'center';
+
+    // Survival: XP bar + level (bottom-center)
+    if (ss.mode === 'survival') {
+      const barW = 320, barH = 16;
+      const bx2 = (W - barW) / 2, by2 = H - 34;
+      const frac = meBuff.xpToNext ? Math.min(1, (meBuff.xp || 0) / meBuff.xpToNext) : 0;
+      gctx.fillStyle = 'rgba(0,0,0,0.6)';
+      gctx.fillRect(bx2 - 2, by2 - 2, barW + 4, barH + 4);
+      gctx.fillStyle = '#1a2410';
+      gctx.fillRect(bx2, by2, barW, barH);
+      gctx.fillStyle = '#7ad24a';
+      gctx.fillRect(bx2, by2, barW * frac, barH);
+      gctx.fillStyle = '#fff';
+      gctx.font = '10px "Press Start 2P",monospace';
+      gctx.textAlign = 'center';
+      gctx.fillText('LV ' + (meBuff.level || 1), W/2, by2 - 8);
+    }
+  }
 
   // crosshair
   gctx.strokeStyle='#ffd24a'; gctx.lineWidth=2;

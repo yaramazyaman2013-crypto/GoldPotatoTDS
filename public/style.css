@@ -385,6 +385,8 @@ canvas { image-rendering: pixelated; display: block; }
 .map-list { display: flex; gap: 6px; flex-wrap: wrap; min-height: 32px; }
 .map-btn { font-size: 10px; padding: 8px 12px; }
 .map-btn.selected { box-shadow: 4px 4px 0 #8a4a00, 0 0 0 3px #4ad2c2; }
+.mode-btn { font-size: 10px; padding: 8px 12px; }
+.mode-btn.selected { box-shadow: 4px 4px 0 #8a4a00, 0 0 0 3px #aef542; }
 .map-item { display: inline-flex; gap: 2px; align-items: stretch; }
 .map-del {
   font-size: 12px; padding: 0 8px; background: #ff5060;
