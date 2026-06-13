@@ -203,6 +203,68 @@ function buildWalls() {
 }
 const DEFAULT_WALLS = buildWalls();
 
+// ============================================================
+// IMPOSTER (Among-Us-like) MODE — constants + dedicated ship map
+// ============================================================
+const IMP = {
+  SPEED: 4.6,
+  KILL_RANGE2: 66 * 66,
+  KILL_COOLDOWN_MS: 25000,
+  REPORT_RANGE2: 95 * 95,
+  EMERGENCY_RANGE2: 95 * 95,
+  EMERGENCY_PER_PLAYER: 1,
+  USE_RANGE2: 72 * 72,         // task / sabotage-fix interaction range
+  VENT_RANGE2: 56 * 56,
+  DISCUSS_MS: 10000,
+  VOTE_MS: 25000,
+  MEETING_END_MS: 5000,        // result reveal before resuming
+  TASKS_PER_PLAYER: 4,
+  SABO_COOLDOWN_MS: 28000,
+  REACTOR_MS: 32000,
+};
+
+// Ship map: outlined rooms with door gaps, plus task/vent/button metadata.
+function buildImposterMap() {
+  const W = C.MAP_W, H = C.MAP_H;
+  const w = [];
+  w.push({x:0,y:0,w:W,h:20}, {x:0,y:H-20,w:W,h:20}, {x:0,y:0,w:20,h:H}, {x:W-20,y:0,w:20,h:H});
+  const rooms = [
+    building(120, 120, 360, 260, { r:[220,300], b:[260,340] }),        // upper-left (Electrical)
+    building(600, 110, 400, 300, { l:[200,280], r:[200,280], b:[760,840] }), // cafeteria (center-top)
+    building(1120,120, 360, 260, { l:[220,300], b:[260,340] }),        // upper-right (Reactor)
+    building(120, 820, 360, 260, { r:[900,980], t:[900,980] }),        // lower-left
+    building(640, 860, 320, 240, { t:[760,840], l:[940,1020] }),       // lower-center
+    building(1120,820, 360, 260, { l:[900,980], t:[900,980] }),        // lower-right (O2)
+  ];
+  for (const arr of rooms) for (const wall of arr) w.push(wall);
+  w.forEach(x => { x.kind = 'stone'; });
+  return {
+    walls: w,
+    groundColor: '#2b2f3a',
+    spawn: { x: 800, y: 300, r: 90 },
+    emergency: { x: 800, y: 250 },
+    tasks: [
+      {id:1,  x:200, y:200}, {id:2,  x:420, y:320},
+      {id:3,  x:700, y:200}, {id:4,  x:900, y:330},
+      {id:5,  x:1200,y:200}, {id:6,  x:1400,y:320},
+      {id:7,  x:200, y:900}, {id:8,  x:420, y:1000},
+      {id:9,  x:760, y:980}, {id:10, x:1200,y:900},
+      {id:11, x:1400,y:1000},{id:12, x:800, y:600},
+    ],
+    // vents grouped — impostor can travel between vents sharing a group
+    vents: [
+      {id:1, x:250,  y:330, group:'A'}, {id:2, x:760, y:360, group:'A'},
+      {id:3, x:1300, y:330, group:'B'}, {id:4, x:1300,y:880, group:'B'},
+      {id:5, x:250,  y:880, group:'C'}, {id:6, x:780, y:1000,group:'C'},
+    ],
+    // lights sabotage fix panel
+    lightsFix: { x:200, y:330 },
+    // reactor sabotage — both points must be activated to resolve
+    reactorFix: [ {x:1170, y:240}, {x:1440, y:240} ],
+  };
+}
+const IMP_MAP = buildImposterMap();
+
 // Custom maps shared between clients (in-memory; the room host can save+share).
 // Map: name -> walls. Filled when a host creates a room with a custom map
 // (inline walls), then used for that room's collision/spawn. Browsers
@@ -333,7 +395,7 @@ function makeCode() {
   return s;
 }
 
-const VALID_MODES = ['ffa', 'survival'];
+const VALID_MODES = ['ffa', 'survival', 'imposter'];
 
 function newRoom(ownerSocketId, ownerName, ownerColor, ownerCls, mapName, mode) {
   let code;
@@ -348,6 +410,9 @@ function newRoom(ownerSocketId, ownerName, ownerColor, ownerCls, mapName, mode) 
     bullets: [], hearts: [], rocketPickups: [], sodas: [], powerups: [],
     monsters: [], gems: [],
     turrets: [], pets: [],
+    // Imposter mode
+    phase: 'play', corpses: [], meeting: null, sabotage: null,
+    nextCorpseId: 1, lastSaboAt: 0, taskTotal: 0, taskDone: 0,
     roundEndsAt: 0, remainingMs: 0, lastHeartSpawn: 0, lastRocketSpawn: 0,
     lastPowerupSpawn: 0, lastMonsterSpawn: 0, survStartAt: 0,
     nextBulletId: 1, nextHeartId: 1, nextRocketId: 1, nextPowerupId: 1,
@@ -392,6 +457,9 @@ function addPlayer(room, id, name, color, cls) {
     speedUntil: 0, dmgUntil: 0, shieldUntil: 0,
     // Survival mode progression
     xp: 0, level: 1, xpToNext: C.SURV_LEVEL_BASE_XP,
+    // Imposter mode
+    role: 'crew', tasks: [], killReadyAt: 0, emergencyUsed: 0,
+    vented: false, ventGroup: null, ventId: 0,
   };
   room.players.set(id, player);
 }
@@ -585,6 +653,7 @@ function cloneWalls(src) {
 }
 
 function startRound(room) {
+  if (room.mode === 'imposter') return startImposterRound(room);
   room.started = true;
   // Fresh per-round walls so mesh hp is room-local
   room.walls = cloneWalls(getMapWalls(room.mapName));
@@ -651,6 +720,7 @@ function endRound(room) {
 
 function checkRoundOver(room) {
   if (!room.started) return;
+  if (room.mode === 'imposter') return; // imposter mode has its own win checks
   const alive = [...room.players.values()].filter(p=>p.alive);
   if (room.mode === 'survival') {
     // Co-op: round only ends when everyone is down (endless otherwise).
@@ -660,6 +730,264 @@ function checkRoundOver(room) {
   if (alive.length <= 1 && room.players.size > 1) return endRound(room);
   if (alive.length === 0) return endRound(room);
   if (room.remainingMs <= 0) return endRound(room);
+}
+
+// ============================================================
+// IMPOSTER MODE LOGIC
+// ============================================================
+function impAssignRolesAndTasks(room) {
+  const ids = [...room.players.keys()];
+  for (let i = ids.length-1; i > 0; i--) { const j = Math.floor(Math.random()*(i+1)); [ids[i],ids[j]]=[ids[j],ids[i]]; }
+  const impCount = ids.length >= 7 ? 2 : 1;
+  const impSet = new Set(ids.slice(0, Math.min(impCount, Math.max(1, ids.length-1))));
+  for (const id of ids) {
+    const p = room.players.get(id);
+    p.role = impSet.has(id) ? 'imposter' : 'crew';
+    p.tasks = [];
+    if (p.role === 'crew') {
+      const pts = [...IMP_MAP.tasks];
+      for (let i = pts.length-1; i > 0; i--) { const j = Math.floor(Math.random()*(i+1)); [pts[i],pts[j]]=[pts[j],pts[i]]; }
+      const n = Math.min(IMP.TASKS_PER_PLAYER, pts.length);
+      p.tasks = pts.slice(0, n).map(pt => ({ id: pt.id, x: pt.x, y: pt.y, done: false }));
+    }
+  }
+}
+
+function startImposterRound(room) {
+  room.started = true;
+  room.phase = 'play';
+  room.walls = cloneWalls(IMP_MAP.walls);
+  room.groundColor = IMP_MAP.groundColor;
+  room.bullets=[]; room.hearts=[]; room.rocketPickups=[]; room.sodas=[]; room.powerups=[];
+  room.monsters=[]; room.gems=[]; room.turrets=[]; room.pets=[];
+  room.corpses=[]; room.meeting=null; room.sabotage=null; room.nextCorpseId=1; room.lastSaboAt=0;
+  room.roundEndsAt=0; room.remainingMs=0; room.tickCount=0;
+  const now = Date.now();
+  impAssignRolesAndTasks(room);
+  let i = 0; const n = Math.max(1, room.players.size);
+  for (const p of room.players.values()) {
+    const a = (i/n) * Math.PI*2;
+    p.x = IMP_MAP.spawn.x + Math.cos(a)*IMP_MAP.spawn.r;
+    p.y = IMP_MAP.spawn.y + Math.sin(a)*IMP_MAP.spawn.r;
+    p.angle=0; p.alive=true; p.vented=false; p.ventGroup=null; p.ventId=0;
+    p.killReadyAt = now + IMP.KILL_COOLDOWN_MS; p.emergencyUsed=0;
+    p.keys = {w:false,a:false,s:false,d:false};
+    i++;
+  }
+  room.taskTotal = 0; room.taskDone = 0;
+  for (const p of room.players.values()) if (p.role==='crew') room.taskTotal += p.tasks.length;
+  io.to(room.code).emit('roundStart', {
+    mode:'imposter', mapW:C.MAP_W, mapH:C.MAP_H, walls:room.walls,
+    groundColor:room.groundColor,
+    imp: { tasks: IMP_MAP.tasks, vents: IMP_MAP.vents, emergency: IMP_MAP.emergency,
+           reactorFix: IMP_MAP.reactorFix, lightsFix: IMP_MAP.lightsFix },
+  });
+  for (const p of room.players.values()) {
+    const teammates = p.role==='imposter'
+      ? [...room.players.values()].filter(q=>q.role==='imposter'&&q.id!==p.id).map(q=>({id:q.id,name:q.name}))
+      : [];
+    io.to(p.id).emit('imposterRole', { role:p.role, tasks:p.tasks, teammates });
+  }
+  if (room.tickHandle) clearInterval(room.tickHandle);
+  room.tickHandle = setInterval(()=>{ try{ tick(room);}catch(e){console.error('imp tick',e);} }, C.TICK_MS);
+}
+
+function impStartMeeting(room, reason, reportedBy) {
+  if (room.phase !== 'play') return;
+  room.phase = 'meeting';
+  room.sabotage = null; room.corpses = [];
+  const now = Date.now();
+  room.meeting = { phase:'discuss', endsAt: now+IMP.DISCUSS_MS, votes:new Map(), reason, reportedBy: reportedBy||null };
+  const living = [...room.players.values()].filter(p=>p.alive);
+  let i = 0;
+  for (const p of living) { const a=(i/Math.max(1,living.length))*Math.PI*2; p.x=IMP_MAP.spawn.x+Math.cos(a)*70; p.y=IMP_MAP.spawn.y+Math.sin(a)*70; p.vented=false; i++; }
+  io.to(room.code).emit('meetingStart', { reason, reportedBy: reportedBy||null, endsAt: room.meeting.endsAt, phase:'discuss' });
+}
+
+function impTallyVotes(room) {
+  const m = room.meeting; if (!m) return;
+  const counts = {};
+  for (const tgt of m.votes.values()) counts[tgt] = (counts[tgt]||0) + 1;
+  let best=null, bestN=0, tie=false;
+  for (const k in counts) {
+    if (counts[k] > bestN) { best=k; bestN=counts[k]; tie=false; }
+    else if (counts[k] === bestN) tie = true;
+  }
+  let ejected = null;
+  if (best && best !== 'skip' && !tie) {
+    const p = room.players.get(best);
+    if (p) { p.alive=false; ejected={id:p.id,name:p.name,wasImposter:p.role==='imposter'}; }
+  }
+  m.phase = 'result'; m.endsAt = Date.now() + IMP.MEETING_END_MS;
+  io.to(room.code).emit('meetingResult', {
+    ejected, tie, skip: best==='skip',
+    votes: Object.fromEntries(m.votes), endsAt: m.endsAt,
+  });
+}
+
+function impCheckWin(room) {
+  if (room.phase === 'ended') return;
+  const players = [...room.players.values()];
+  const livingImp  = players.filter(p=>p.alive && p.role==='imposter').length;
+  const livingCrew = players.filter(p=>p.alive && p.role==='crew').length;
+  if (livingImp === 0) return impEndRound(room, 'crew');
+  if (livingImp >= livingCrew) return impEndRound(room, 'imposter');
+  if (room.taskTotal > 0 && room.taskDone >= room.taskTotal) return impEndRound(room, 'crew');
+}
+
+function impEndRound(room, winnerSide) {
+  if (!room.started) return;
+  room.started = false; room.phase = 'ended';
+  if (room.tickHandle) { clearInterval(room.tickHandle); room.tickHandle = null; }
+  const roles = [...room.players.values()].map(p=>({id:p.id,name:p.name,color:p.color,role:p.role}));
+  io.to(room.code).emit('roundEnd', { mode:'imposter', winnerSide, roles, board:[], winner:null });
+  if (room.pendingRestart) clearTimeout(room.pendingRestart);
+  room.pendingRestart = setTimeout(()=>{ if (rooms.has(room.code) && room.players.size>0) startRound(room); }, 8000);
+}
+
+function broadcastImposter(room) {
+  if (room.tickCount % C.BROADCAST_EVERY !== 0) return;
+  const now = Date.now();
+  const common = {
+    mode:'imposter', phase: room.phase,
+    taskDone: room.taskDone, taskTotal: room.taskTotal,
+    corpses: room.corpses.map(c=>({id:c.id,x:c.x,y:c.y,color:c.color})),
+    sabotage: room.sabotage ? { type:room.sabotage.type, endsAt:room.sabotage.endsAt||0,
+      fixPoints:(room.sabotage.fixPoints||[]).map(f=>({x:f.x,y:f.y,fixed:f.fixed})) } : null,
+    meeting: room.meeting ? { phase:room.meeting.phase, endsAt:room.meeting.endsAt,
+      reason:room.meeting.reason, reportedBy:room.meeting.reportedBy,
+      voted:[...room.meeting.votes.keys()] } : null,
+  };
+  for (const viewer of room.players.values()) {
+    const viewerGhost = !viewer.alive;
+    const players = [];
+    for (const p of room.players.values()) {
+      if (!p.alive && !viewerGhost && p.id !== viewer.id) continue;        // ghosts seen only by ghosts
+      if (p.vented && p.id !== viewer.id && viewer.role !== 'imposter') continue; // vented hidden
+      players.push({ id:p.id,name:p.name,color:p.color,x:p.x,y:p.y,angle:p.angle,alive:p.alive,vented:p.vented });
+    }
+    const self = {
+      role: viewer.role, alive: viewer.alive, vented: viewer.vented,
+      tasks: viewer.tasks.map(t=>({id:t.id,x:t.x,y:t.y,done:t.done})),
+      killReadyIn: viewer.role==='imposter' ? Math.max(0, viewer.killReadyAt-now) : 0,
+      emergencyUsed: viewer.emergencyUsed,
+      saboReadyIn: viewer.role==='imposter' ? Math.max(0, (room.lastSaboAt+IMP.SABO_COOLDOWN_MS)-now) : 0,
+    };
+    io.to(viewer.id).emit('impState', { ...common, players, self, t: now });
+  }
+}
+
+function imposterTick(room) {
+  const now = Date.now();
+  room.tickCount++;
+  if (room.phase === 'meeting') {
+    const m = room.meeting;
+    if (m) {
+      if (m.phase === 'discuss' && now >= m.endsAt) {
+        m.phase = 'vote'; m.endsAt = now + IMP.VOTE_MS;
+        io.to(room.code).emit('meetingPhase', { phase:'vote', endsAt:m.endsAt });
+      } else if (m.phase === 'vote') {
+        const living = [...room.players.values()].filter(p=>p.alive).length;
+        if (now >= m.endsAt || m.votes.size >= living) { impTallyVotes(room); }
+      } else if (m.phase === 'result' && now >= m.endsAt) {
+        room.meeting = null; room.phase = 'play';
+        for (const p of room.players.values()) p.killReadyAt = now + IMP.KILL_COOLDOWN_MS;
+        impCheckWin(room);
+      }
+    }
+    broadcastImposter(room);
+    return;
+  }
+  // play phase: reactor sabotage countdown
+  if (room.sabotage && room.sabotage.type === 'reactor') {
+    if (room.sabotage.fixPoints.every(f=>f.fixed)) { room.sabotage = null; io.to(room.code).emit('sabotageEnd',{}); }
+    else if (now >= room.sabotage.endsAt) { return impEndRound(room, 'imposter'); }
+  }
+  // movement (ghosts move too, to finish tasks; vented impostors teleport instead)
+  for (const p of room.players.values()) {
+    if (p.vented) continue;
+    let dx=0, dy=0;
+    if (p.keys.w) dy-=1; if (p.keys.s) dy+=1; if (p.keys.a) dx-=1; if (p.keys.d) dx+=1;
+    if (dx||dy) { const len=Math.hypot(dx,dy); tryMove(p, dx/len*IMP.SPEED, dy/len*IMP.SPEED, C.PLAYER_R); }
+  }
+  impCheckWin(room);
+  broadcastImposter(room);
+}
+
+// ---- imposter actions (called from socket handlers) ----
+function impDoKill(room, p) {
+  if (room.phase!=='play' || p.role!=='imposter' || !p.alive || p.vented) return;
+  const now = Date.now(); if (now < p.killReadyAt) return;
+  let victim=null, best=IMP.KILL_RANGE2;
+  for (const q of room.players.values()) {
+    if (!q.alive || q.role==='imposter' || q.vented) continue;
+    const d2=(q.x-p.x)**2+(q.y-p.y)**2; if (d2<best) { best=d2; victim=q; }
+  }
+  if (!victim) return;
+  victim.alive = false;
+  room.corpses.push({ id:room.nextCorpseId++, x:victim.x, y:victim.y, color:victim.color });
+  p.killReadyAt = now + IMP.KILL_COOLDOWN_MS;
+  p.x = victim.x; p.y = victim.y;
+  io.to(room.code).emit('impKillFx', { x:victim.x, y:victim.y });
+  io.to(victim.id).emit('impYouDied', {});
+  impCheckWin(room);
+}
+function impDoReport(room, p) {
+  if (room.phase!=='play' || !p.alive) return;
+  let near=false; for (const c of room.corpses) { if ((c.x-p.x)**2+(c.y-p.y)**2<IMP.REPORT_RANGE2) { near=true; break; } }
+  if (!near) return;
+  impStartMeeting(room, 'report', p.id);
+}
+function impDoEmergency(room, p) {
+  if (room.phase!=='play' || !p.alive) return;
+  const e=IMP_MAP.emergency; if ((e.x-p.x)**2+(e.y-p.y)**2>IMP.EMERGENCY_RANGE2) return;
+  if (p.emergencyUsed >= IMP.EMERGENCY_PER_PLAYER) return;
+  p.emergencyUsed++; impStartMeeting(room, 'emergency', p.id);
+}
+function impDoVote(room, p, targetId) {
+  const m=room.meeting;
+  if (room.phase!=='meeting' || !m || m.phase!=='vote' || !p.alive) return;
+  if (m.votes.has(p.id)) return;
+  const ok = targetId==='skip' || (room.players.has(targetId) && room.players.get(targetId).alive);
+  if (!ok) return;
+  m.votes.set(p.id, targetId);
+}
+function impDoTask(room, p, pointId) {
+  if (room.phase!=='play') return;
+  const t = p.tasks.find(t=>t.id===pointId && !t.done);
+  if (!t) return;
+  if ((t.x-p.x)**2+(t.y-p.y)**2 > IMP.USE_RANGE2) return;
+  t.done = true; room.taskDone++;
+  impCheckWin(room);
+}
+function impDoSabotage(room, p, type) {
+  if (room.phase!=='play' || p.role!=='imposter' || !p.alive) return;
+  const now=Date.now(); if (now < room.lastSaboAt+IMP.SABO_COOLDOWN_MS || room.sabotage) return;
+  if (type==='lights') room.sabotage = { type:'lights', fixPoints:[{x:IMP_MAP.lightsFix.x,y:IMP_MAP.lightsFix.y,fixed:false}] };
+  else if (type==='reactor') room.sabotage = { type:'reactor', endsAt:now+IMP.REACTOR_MS, fixPoints:IMP_MAP.reactorFix.map(f=>({x:f.x,y:f.y,fixed:false})) };
+  else return;
+  room.lastSaboAt = now;
+  io.to(room.code).emit('sabotageStart', { type });
+}
+function impDoFix(room, p) {
+  if (room.phase!=='play' || !room.sabotage || !p.alive || p.role==='imposter') return;
+  for (const f of room.sabotage.fixPoints) if (!f.fixed && (f.x-p.x)**2+(f.y-p.y)**2<IMP.USE_RANGE2) f.fixed=true;
+  if (room.sabotage.fixPoints.every(f=>f.fixed)) { room.sabotage=null; io.to(room.code).emit('sabotageEnd',{}); }
+}
+function impDoVent(room, p, action) {
+  if (room.phase!=='play' || p.role!=='imposter' || !p.alive) return;
+  if (action==='enter') {
+    if (p.vented) return;
+    for (const v of IMP_MAP.vents) if ((v.x-p.x)**2+(v.y-p.y)**2<IMP.VENT_RANGE2) { p.vented=true; p.ventGroup=v.group; p.ventId=v.id; p.x=v.x; p.y=v.y; return; }
+  } else if (action==='exit') {
+    if (p.vented) { p.vented=false; p.ventGroup=null; }
+  } else if (action==='move') {
+    if (!p.vented) return;
+    const group = IMP_MAP.vents.filter(v=>v.group===p.ventGroup);
+    const idx = group.findIndex(v=>v.id===p.ventId);
+    const next = group[(idx+1)%group.length];
+    if (next) { p.ventId=next.id; p.x=next.x; p.y=next.y; }
+  }
 }
 
 function tryMove(p, dx, dy, r) {
@@ -714,6 +1042,7 @@ function applyDamage(room, victim, dmg, killerId) {
 
 function tick(room) {
   if (!room.started) return;
+  if (room.mode === 'imposter') return imposterTick(room);
   const now = Date.now();
   room.tickCount++;
   // Tick-driven round timer: pauses naturally if tick skipped due to error
@@ -1216,7 +1545,7 @@ io.on('connection', (socket) => {
   socket.on('placeTurret', () => {
     const code = socketRoom.get(socket.id);
     const room = code && rooms.get(code);
-    if (!room || !room.started) return;
+    if (!room || !room.started || room.mode === 'imposter') return;
     const p = room.players.get(socket.id);
     if (!p || !p.alive || p.cls !== 'engineer') return;
     if (Date.now() < p.turretReadyAt) return;
@@ -1244,7 +1573,7 @@ io.on('connection', (socket) => {
    try {
     const code = socketRoom.get(socket.id);
     const room = code && rooms.get(code);
-    if (!room || !room.started) return;
+    if (!room || !room.started || room.mode === 'imposter') return;
     const p = room.players.get(socket.id);
     if (!p || !p.alive || p.cls !== 'engineer') return;
     if (typeof x !== 'number' || typeof y !== 'number') return;
@@ -1262,7 +1591,7 @@ io.on('connection', (socket) => {
   socket.on('placePet', () => {
     const code = socketRoom.get(socket.id);
     const room = code && rooms.get(code);
-    if (!room || !room.started) return;
+    if (!room || !room.started || room.mode === 'imposter') return;
     const p = room.players.get(socket.id);
     if (!p || !p.alive || p.cls !== 'medic') return;
     if (Date.now() < p.petReadyAt) return;
@@ -1310,11 +1639,28 @@ io.on('connection', (socket) => {
     if (typeof input.mouseDown === 'boolean') p.leftDown = input.mouseDown;
   });
 
+  // ---- Imposter mode actions ----
+  function impRoomPlayer() {
+    const code = socketRoom.get(socket.id);
+    const room = code && rooms.get(code);
+    if (!room || room.mode !== 'imposter' || !room.started) return null;
+    const p = room.players.get(socket.id);
+    return p ? { room, p } : null;
+  }
+  socket.on('impKill',      () => { const c=impRoomPlayer(); if (c) impDoKill(c.room, c.p); });
+  socket.on('impReport',    () => { const c=impRoomPlayer(); if (c) impDoReport(c.room, c.p); });
+  socket.on('impEmergency', () => { const c=impRoomPlayer(); if (c) impDoEmergency(c.room, c.p); });
+  socket.on('impVote',  ({target}) => { const c=impRoomPlayer(); if (c) impDoVote(c.room, c.p, target); });
+  socket.on('impTask',  ({id})     => { const c=impRoomPlayer(); if (c) impDoTask(c.room, c.p, id); });
+  socket.on('impSabotage', ({type})=> { const c=impRoomPlayer(); if (c) impDoSabotage(c.room, c.p, type); });
+  socket.on('impFix',   () => { const c=impRoomPlayer(); if (c) impDoFix(c.room, c.p); });
+  socket.on('impVent',  ({action}) => { const c=impRoomPlayer(); if (c) impDoVent(c.room, c.p, action); });
+
   socket.on('knifeSwing', () => {
    try {
     const code = socketRoom.get(socket.id);
     const room = code && rooms.get(code);
-    if (!room) return;
+    if (!room || room.mode === 'imposter') return;
     const p = room.players.get(socket.id);
     if (!p || !p.alive || p.cls !== 'sniper') return;
     const now = Date.now();
@@ -1341,7 +1687,7 @@ io.on('connection', (socket) => {
   socket.on('reload', () => {
     const code = socketRoom.get(socket.id);
     const room = code && rooms.get(code);
-    if (!room) return;
+    if (!room || room.mode === 'imposter') return;
     const p = room.players.get(socket.id);
     const maxA = p.cls === 'pyro' ? C.PYRO_FUEL_MAX : (p.cls === 'sniper' ? 1 : C.MAG_SIZE);
     if (!p || !p.alive || p.reloading || p.ammo === maxA || p.cls === 'pyro') return;
@@ -1428,7 +1774,10 @@ function leaveCurrentRoom(socket) {
     room.ownerId = room.players.keys().next().value;
     io.to(code).emit('hostChanged', {newOwnerId: room.ownerId});
   }
-  if (room.started) checkRoundOver(room);
+  if (room.started) {
+    if (room.mode === 'imposter') impCheckWin(room);
+    else checkRoundOver(room);
+  }
   if (rooms.has(code)) io.to(code).emit('roomUpdate', publicRoom(room));
 }
 
