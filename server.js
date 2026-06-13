@@ -255,44 +255,48 @@ const IMP = {
   REACTOR_MS: 32000,
 };
 
-// Ship map: outlined rooms with door gaps, plus task/vent/button metadata.
+// Ship map: a clean, symmetric 3×2 room grid with wide doorways and a central
+// cafeteria. Task/vent/button points sit in open room interiors so they are
+// always reachable.
 function buildImposterMap() {
-  const W = C.MAP_W, H = C.MAP_H;
+  const W = C.MAP_W, H = C.MAP_H; // 1600 x 1200
   const w = [];
   w.push({x:0,y:0,w:W,h:20}, {x:0,y:H-20,w:W,h:20}, {x:0,y:0,w:20,h:H}, {x:W-20,y:0,w:20,h:H});
   const rooms = [
-    building(120, 120, 360, 260, { r:[220,300], b:[260,340] }),        // upper-left (Electrical)
-    building(600, 110, 400, 300, { l:[200,280], r:[200,280], b:[760,840] }), // cafeteria (center-top)
-    building(1120,120, 360, 260, { l:[220,300], b:[260,340] }),        // upper-right (Reactor)
-    building(120, 820, 360, 260, { r:[900,980], t:[900,980] }),        // lower-left
-    building(640, 860, 320, 240, { t:[760,840], l:[940,1020] }),       // lower-center
-    building(1120,820, 360, 260, { l:[900,980], t:[900,980] }),        // lower-right (O2)
+    // top row
+    building(120, 140, 380, 300, { r:[260,360], b:[300,380] }),                 // Electrik (TL)
+    building(610, 120, 380, 320, { b:[770,860], l:[250,350], r:[250,350] }),    // Kafeterya (TC)
+    building(1100,140, 380, 300, { l:[260,360], b:[300,380] }),                 // Reaktor (TR)
+    // bottom row
+    building(120, 760, 380, 300, { r:[880,980], t:[880,980] }),                 // Depo (BL)
+    building(610, 780, 380, 300, { t:[920,1000] }),                             // Revir (BC)
+    building(1100,760, 380, 300, { l:[880,980], t:[880,980] }),                 // O2 (BR)
   ];
   for (const arr of rooms) for (const wall of arr) w.push(wall);
   w.forEach(x => { x.kind = 'stone'; });
   return {
     walls: w,
-    groundColor: '#2b2f3a',
-    spawn: { x: 800, y: 300, r: 90 },
-    emergency: { x: 800, y: 250 },
+    groundColor: '#262a36',
+    spawn: { x: 800, y: 300, r: 80 },
+    emergency: { x: 800, y: 240 },
     tasks: [
-      {id:1,  x:200, y:200}, {id:2,  x:420, y:320},
-      {id:3,  x:700, y:200}, {id:4,  x:900, y:330},
-      {id:5,  x:1200,y:200}, {id:6,  x:1400,y:320},
-      {id:7,  x:200, y:900}, {id:8,  x:420, y:1000},
-      {id:9,  x:760, y:980}, {id:10, x:1200,y:900},
-      {id:11, x:1400,y:1000},{id:12, x:800, y:600},
+      {id:1,  x:300, y:250}, {id:2,  x:430, y:390},
+      {id:3,  x:700, y:250}, {id:4,  x:900, y:390},
+      {id:5,  x:1290,y:250}, {id:6,  x:1170,y:390},
+      {id:7,  x:300, y:900}, {id:8,  x:430, y:1000},
+      {id:9,  x:800, y:930}, {id:10, x:1290,y:900},
+      {id:11, x:1170,y:1000},{id:12, x:800, y:560},
     ],
     // vents grouped — impostor can travel between vents sharing a group
     vents: [
-      {id:1, x:250,  y:330, group:'A'}, {id:2, x:760, y:360, group:'A'},
-      {id:3, x:1300, y:330, group:'B'}, {id:4, x:1300,y:880, group:'B'},
-      {id:5, x:250,  y:880, group:'C'}, {id:6, x:780, y:1000,group:'C'},
+      {id:1, x:170,  y:400, group:'A'}, {id:2, x:760,  y:175, group:'A'},
+      {id:3, x:1430, y:400, group:'B'}, {id:4, x:1430, y:820, group:'B'},
+      {id:5, x:170,  y:820, group:'C'}, {id:6, x:760,  y:1010,group:'C'},
     ],
-    // lights sabotage fix panel
-    lightsFix: { x:200, y:330 },
-    // reactor sabotage — both points must be activated to resolve
-    reactorFix: [ {x:1170, y:240}, {x:1440, y:240} ],
+    // lights sabotage fix panel (in Electrik)
+    lightsFix: { x:300, y:330 },
+    // reactor sabotage — both points must be activated to resolve (in Reaktor)
+    reactorFix: [ {x:1170, y:240}, {x:1410, y:240} ],
   };
 }
 const IMP_MAP = buildImposterMap();

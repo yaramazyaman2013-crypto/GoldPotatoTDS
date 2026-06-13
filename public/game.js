@@ -1987,7 +1987,13 @@ function getPipRow(lives, maxPips) {
 function render() {
   requestAnimationFrame(render);
   if (state.inGame && state.mode === 'imposter') {
-    if ($('pauseMenu').classList.contains('hidden')) renderImposter();
+    // Skip the world render when a full-screen overlay covers it (saves CPU and
+    // stops the map churning behind meeting/task/pause screens).
+    const covered = !$('pauseMenu').classList.contains('hidden')
+      || !$('meetingModal').classList.contains('hidden')
+      || !$('taskModal').classList.contains('hidden')
+      || !$('roundEnd').classList.contains('hidden');
+    if (!covered) renderImposter();
     return;
   }
   if (!state.inGame || !state.serverState) return;
@@ -2890,6 +2896,7 @@ socket.on('meetingResult', ({ ejected, tie, skip }) => {
   $('meetingResult2').textContent = txt;
   $('voteList').innerHTML = '';
   $('voteSkip').classList.add('hidden');
+  _voteSig = '';
 });
 
 socket.on('sabotageStart', ({ type }) => {
@@ -2942,24 +2949,35 @@ function impOpenMeeting() {
   $('voteSkip').classList.remove('hidden');
   $('taskModal').classList.add('hidden');
   $('saboMenu').classList.add('hidden');
+  _voteSig = '';
   impRefreshMeeting();
 }
+let _voteSig = '';
 function impRefreshMeeting() {
   const st = state.imp && state.imp.st; if (!st || !st.meeting) return;
   const m = st.meeting;
   $('meetingTitle').textContent = m.reason === 'report' ? 'CESET BULUNDU' : 'ACIL TOPLANTI';
   const off = state.serverTimeOffset || 0;
   const rem = Math.max(0, Math.ceil((m.endsAt - (Date.now()+off))/1000));
-  $('meetingTimer').textContent = (m.phase === 'vote' ? 'OYLAMA: ' : 'TARTISMA: ') + rem + 's';
-  if (m.phase === 'result') return;
+  const phaseLbl = m.phase === 'vote' ? 'OYLAMA: ' : (m.phase === 'result' ? 'SONUC: ' : 'TARTISMA: ');
+  $('meetingTimer').textContent = phaseLbl + rem + 's';   // cheap: update every frame
+  if (m.phase === 'result') { _voteSig = ''; return; }
   const me = impMe();
   const canVote = m.phase === 'vote' && me && me.alive && !(m.voted||[]).includes(socket.id);
+  // Rebuild the vote rows ONLY when something relevant changes — rebuilding
+  // every frame destroyed the button you were clicking (voting felt broken)
+  // and caused stutter.
+  const voted = m.voted || [];
+  const aliveIds = st.players.filter(p => p.alive).map(p => p.id);
+  const sig = m.phase + '|' + canVote + '|' + voted.join(',') + '|' + aliveIds.join(',');
+  if (sig === _voteSig) return;
+  _voteSig = sig;
   const list = $('voteList'); list.innerHTML = '';
   for (const p of st.players) {
     if (!p.alive) continue;
     const row = document.createElement('div'); row.className = 'vote-row';
-    const voted = (m.voted||[]).includes(p.id) ? ' ✓' : '';
-    row.innerHTML = `<span class="vname"><span class="vchip" style="background:${p.color}"></span>${p.name}${voted}</span>`;
+    const hasVoted = voted.includes(p.id) ? ' ✓' : '';
+    row.innerHTML = `<span class="vname"><span class="vchip" style="background:${p.color}"></span>${p.name}${hasVoted}</span>`;
     const btn = document.createElement('button');
     btn.textContent = 'OY VER';
     btn.disabled = !canVote;
@@ -3046,19 +3064,43 @@ wireCanvas.addEventListener('click', (e) => {
 $('taskClose').addEventListener('click', () => { $('taskModal').classList.add('hidden'); _wireState = null; });
 
 // ---- rendering ----
-function impDrawMarker(ctx, x, y, color, label, highlight) {
+// Clean vector icons for ship objectives (no pixel font — renders crisply).
+// type: 'task' | 'vent' | 'emergency' | 'fix'
+function impDrawMarker(ctx, x, y, type, highlight) {
   ctx.save();
   if (highlight) {
     const pulse = 0.5 + 0.5*Math.sin(Date.now()/250);
-    ctx.globalAlpha = 0.4 + pulse*0.4;
+    ctx.globalAlpha = 0.35 + pulse*0.45;
     ctx.fillStyle = '#ffd24a';
-    ctx.beginPath(); ctx.arc(x, y, 20 + pulse*4, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x, y, 22 + pulse*5, 0, Math.PI*2); ctx.fill();
     ctx.globalAlpha = 1;
   }
-  ctx.fillStyle = '#000'; ctx.fillRect(x-12, y-12, 24, 24);
-  ctx.fillStyle = color; ctx.fillRect(x-10, y-10, 20, 20);
-  ctx.fillStyle = '#000'; ctx.font = '12px "Press Start 2P",monospace'; ctx.textAlign='center';
-  ctx.fillText(label, x, y+5);
+  const colors = { task:'#2fd6c0', vent:'#7a8090', emergency:'#ff4654', fix:'#ffae20' };
+  const base = colors[type] || '#888';
+  // token: outer ring + filled disc
+  ctx.beginPath(); ctx.arc(x, y, 15, 0, Math.PI*2);
+  ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fill();
+  ctx.beginPath(); ctx.arc(x, y, 13, 0, Math.PI*2);
+  ctx.fillStyle = base; ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.stroke();
+  ctx.fillStyle = '#10141c'; ctx.strokeStyle = '#10141c';
+  if (type === 'task') {
+    // checkmark
+    ctx.lineWidth = 2.6; ctx.lineCap = 'round'; ctx.beginPath();
+    ctx.moveTo(x-5, y); ctx.lineTo(x-1, y+4); ctx.lineTo(x+6, y-5); ctx.stroke();
+  } else if (type === 'vent') {
+    // grate bars
+    ctx.lineWidth = 2;
+    for (let i = -1; i <= 1; i++) { ctx.beginPath(); ctx.moveTo(x-6, y+i*4); ctx.lineTo(x+6, y+i*4); ctx.stroke(); }
+  } else if (type === 'emergency') {
+    // exclamation
+    ctx.fillRect(x-1.5, y-6, 3, 7); ctx.fillRect(x-1.5, y+3, 3, 3);
+  } else if (type === 'fix') {
+    // wrench cross
+    ctx.lineWidth = 2.6; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(x-5, y-5); ctx.lineTo(x+5, y+5); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x+5, y-5); ctx.lineTo(x-5, y+5); ctx.stroke();
+  }
   ctx.restore();
 }
 
@@ -3085,18 +3127,19 @@ function renderImposter() {
   }
   const map = state.imp.map || {};
   const myUndone = new Set((st.self.tasks||[]).filter(t=>!t.done).map(t=>t.id));
-  // task points
-  for (const t of (map.tasks||[])) impDrawMarker(gctx, t.x-camX, t.y-camY, '#3fd6c0', '✦', myUndone.has(t.id));
-  // vents (only emphasized for impostor)
-  for (const v of (map.vents||[])) {
-    const isImp = st.self.role === 'imposter';
-    impDrawMarker(gctx, v.x-camX, v.y-camY, isImp ? '#a06aff' : '#555', '≣', false);
+  // task points (only show your own remaining tasks for crew clarity)
+  for (const t of (map.tasks||[])) {
+    if (st.self.role === 'crew' && !myUndone.has(t.id)) continue;
+    impDrawMarker(gctx, t.x-camX, t.y-camY, 'task', myUndone.has(t.id));
   }
+  // vents (only shown to the impostor)
+  if (st.self.role === 'imposter')
+    for (const v of (map.vents||[])) impDrawMarker(gctx, v.x-camX, v.y-camY, 'vent', false);
   // emergency button
-  if (map.emergency) impDrawMarker(gctx, map.emergency.x-camX, map.emergency.y-camY, '#ff4040', '!', impNearEmergency());
+  if (map.emergency) impDrawMarker(gctx, map.emergency.x-camX, map.emergency.y-camY, 'emergency', impNearEmergency());
   // sabotage fix points
   if (st.sabotage) for (const f of st.sabotage.fixPoints) if (!f.fixed)
-    impDrawMarker(gctx, f.x-camX, f.y-camY, '#ffae20', '⚒', st.self.role==='crew');
+    impDrawMarker(gctx, f.x-camX, f.y-camY, 'fix', st.self.role==='crew');
   // corpses
   for (const c of (st.corpses||[])) {
     const x = c.x-camX, y = c.y-camY;
@@ -3119,14 +3162,16 @@ function renderImposter() {
     gctx.font='10px "Press Start 2P",monospace'; gctx.textAlign='center';
     gctx.fillText((p.name||'').slice(0,8), x, y+32);
   }
-  // vision mask (ghosts see all)
+  // vision mask / fog-of-war (ghosts see the whole ship). Fully opaque beyond
+  // the light radius so you genuinely cannot see outside your view.
   if (me && st.self.alive) {
     const lightsOut = st.sabotage && st.sabotage.type === 'lights';
-    const vis = lightsOut ? 150 : 330;
+    const vis = lightsOut ? 170 : 340;
     const mx = me.x-camX, my = me.y-camY;
-    const grad = gctx.createRadialGradient(mx, my, vis*0.55, mx, my, vis);
+    const grad = gctx.createRadialGradient(mx, my, vis*0.6, mx, my, vis);
     grad.addColorStop(0, 'rgba(0,0,0,0)');
-    grad.addColorStop(1, lightsOut ? 'rgba(0,0,0,0.97)' : 'rgba(0,0,0,0.9)');
+    grad.addColorStop(0.85, lightsOut ? 'rgba(2,2,6,0.85)' : 'rgba(2,2,6,0.7)');
+    grad.addColorStop(1, 'rgba(2,2,6,1)');     // solid black at the edge
     gctx.fillStyle = grad; gctx.fillRect(0,0,W,H);
   }
 }
