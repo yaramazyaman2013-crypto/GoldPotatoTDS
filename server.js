@@ -95,6 +95,16 @@ const C = {
   MAX_SODAS:       2,
   SODA_HEAL:       3,
   SODA_SPAWN_CHANCE: 0.87,
+  // Power-ups (temporary buffs) — picked up off the ground
+  POWERUP_SPAWN_MS:     28 * 1000,
+  MAX_POWERUPS:         2,
+  POWERUP_SPAWN_CHANCE: 0.85,
+  POWERUP_TYPES:        ['speed', 'damage', 'shield'],
+  SPEED_BUFF_MS:        8000,
+  SPEED_BUFF_MUL:       1.6,
+  DAMAGE_BUFF_MS:       8000,
+  DAMAGE_BUFF_MUL:      2,
+  SHIELD_BUFF_MS:       6000,
   // Turret
   TURRET_HP: 32,
   TURRET_MOVE_SPEED: 3.2,
@@ -319,10 +329,11 @@ function newRoom(ownerSocketId, ownerName, ownerColor, ownerCls, mapName) {
     mapName: mapName || 'default',
     walls: getMapWalls(mapName),
     players: new Map(),
-    bullets: [], hearts: [], rocketPickups: [], sodas: [],
+    bullets: [], hearts: [], rocketPickups: [], sodas: [], powerups: [],
     turrets: [], pets: [],
     roundEndsAt: 0, remainingMs: 0, lastHeartSpawn: 0, lastRocketSpawn: 0,
-    nextBulletId: 1, nextHeartId: 1, nextRocketId: 1,
+    lastPowerupSpawn: 0,
+    nextBulletId: 1, nextHeartId: 1, nextRocketId: 1, nextPowerupId: 1,
     nextTurretId: 1, nextPetId: 1,
     tickHandle: null, pendingRestart: null,
     tickCount: 0,
@@ -359,6 +370,8 @@ function addPlayer(room, id, name, color, cls) {
     heartReadyAt: Date.now() + 150 * 1000,
     tankUntil: 0,
     tankKills: 0, // resets each round; counts kills since last tank form
+    // Power-up buff timers (epoch ms; buff active while now < value)
+    speedUntil: 0, dmgUntil: 0, shieldUntil: 0,
   };
   room.players.set(id, player);
 }
@@ -415,6 +428,20 @@ function spawnSoda(room) {
   }
 }
 
+function spawnPowerup(room) {
+  if (room.powerups.length >= C.MAX_POWERUPS) return;
+  if (Math.random() > C.POWERUP_SPAWN_CHANCE) return;
+  const type = C.POWERUP_TYPES[Math.floor(Math.random() * C.POWERUP_TYPES.length)];
+  for (let i = 0; i < 50; i++) {
+    const x = 60 + Math.random() * (C.MAP_W - 120);
+    const y = 60 + Math.random() * (C.MAP_H - 120);
+    if (!hitsWallList(room.walls, x, y, 12)) {
+      room.powerups.push({ id: room.nextPowerupId++, x, y, type });
+      return;
+    }
+  }
+}
+
 function cloneWalls(src) {
   // Per-round room copy: mesh walls get hp; assign ids; build spatial index.
   // Mesh rects (legacy maps saved before NO_MERGE) get split into 1-cell
@@ -454,6 +481,7 @@ function startRound(room) {
   // Fresh per-round walls so mesh hp is room-local
   room.walls = cloneWalls(getMapWalls(room.mapName));
   room.bullets = []; room.hearts = []; room.rocketPickups = []; room.sodas = [];
+  room.powerups = [];
   room.turrets = []; room.pets = [];
   room.roundEndsAt = Date.now() + C.ROUND_MS;
   room.remainingMs = C.ROUND_MS;
@@ -461,8 +489,9 @@ function startRound(room) {
   room.lastHeartSpawn = now;
   room.lastRocketSpawn = now;
   room.lastSodaSpawn = now;
+  room.lastPowerupSpawn = now;
   room.nextBulletId = 1; room.nextHeartId = 1; room.nextRocketId = 1;
-  room.nextSodaId = 1;
+  room.nextSodaId = 1; room.nextPowerupId = 1;
   room.nextTurretId = 1; room.nextPetId = 1;
   room.tickCount = 0;
   for (const p of room.players.values()) {
@@ -477,6 +506,7 @@ function startRound(room) {
     p.petReadyAt = now;
     p.heartReadyAt = now + C.MEDIC_HEART_CD;
     p.tankUntil = 0; p.tankKills = 0;
+    p.speedUntil = 0; p.dmgUntil = 0; p.shieldUntil = 0;
   }
   for (let i = 0; i < 4; i++) spawnHeart(room);
   spawnRocketPickup(room);
@@ -525,6 +555,14 @@ function tryMove(p, dx, dy, r) {
 }
 
 function applyDamage(room, victim, dmg, killerId) {
+  const nowD = Date.now();
+  // Shield power-up: fully absorbs incoming damage while active.
+  if (nowD < victim.shieldUntil) return;
+  // Damage power-up: attacker deals extra damage while active.
+  const killerD = room.players.get(killerId);
+  if (killerD && killerD !== victim && nowD < killerD.dmgUntil) {
+    dmg = Math.ceil(dmg * C.DAMAGE_BUFF_MUL);
+  }
   victim.hp -= dmg;
   if (victim.hp <= 0) {
     victim.lives--;
@@ -570,6 +608,9 @@ function tick(room) {
   if (now - (room.lastSodaSpawn||0) >= C.SODA_SPAWN_MS) {
     spawnSoda(room); room.lastSodaSpawn = now;
   }
+  if (now - (room.lastPowerupSpawn||0) >= C.POWERUP_SPAWN_MS) {
+    spawnPowerup(room); room.lastPowerupSpawn = now;
+  }
 
   for (const p of room.players.values()) {
     if (!p.alive) continue;
@@ -586,7 +627,8 @@ function tick(room) {
     }
     // Tank mode expiry
     const isTank = now < p.tankUntil;
-    const speedMul = isTank ? 0.7 : (p.cls === 'pyro' ? 1.2 : (p.cls === 'sniper' ? 1.5 : 1));
+    const speedBuff = now < p.speedUntil ? C.SPEED_BUFF_MUL : 1;
+    const speedMul = speedBuff * (isTank ? 0.7 : (p.cls === 'pyro' ? 1.2 : (p.cls === 'sniper' ? 1.5 : 1)));
     const playerR = isTank ? C.PLAYER_R + 12 : C.PLAYER_R;
 
     let dx = 0, dy = 0;
@@ -676,6 +718,17 @@ function tick(room) {
         p.hp = Math.min(maxHp, p.hp + C.SODA_HEAL);
         io.to(room.code).emit('heal', { id: p.id, amount: p.hp - before });
         room.sodas.splice(i, 1);
+      }
+    }
+    for (let i = room.powerups.length-1; i >= 0; i--) {
+      const pu = room.powerups[i];
+      magnetTo(p, pu);
+      if ((pu.x-p.x)**2+(pu.y-p.y)**2 < (C.PLAYER_R+12)**2) {
+        if (pu.type === 'speed')       p.speedUntil  = now + C.SPEED_BUFF_MS;
+        else if (pu.type === 'damage') p.dmgUntil    = now + C.DAMAGE_BUFF_MS;
+        else if (pu.type === 'shield') p.shieldUntil = now + C.SHIELD_BUFF_MS;
+        io.to(room.code).emit('powerup', { id: p.id, type: pu.type });
+        room.powerups.splice(i, 1);
       }
     }
   }
@@ -867,12 +920,16 @@ function tick(room) {
         heartReadyIn: Math.max(0, p.heartReadyAt - now),
         cyberReadyIn: p.cls === 'cyber' ? Math.max(0, (p.lastCyberRocketAt + C.CYBER_ROCKET_INTERVAL) - now) : 0,
         tankRemaining: Math.max(0, p.tankUntil - now),
+        speedMs:  Math.max(0, p.speedUntil  - now),
+        dmgMs:    Math.max(0, p.dmgUntil    - now),
+        shieldMs: Math.max(0, p.shieldUntil - now),
         alive:p.alive, kills:p.kills,
       })),
       bullets: room.bullets.map(b=>({id:b.id, x:b.x, y:b.y, type:b.type||'bullet', angle:b.angle})),
       hearts:  room.hearts.map(h=>({x:h.x, y:h.y})),
       rocketPickups: room.rocketPickups.map(r=>({x:r.x, y:r.y})),
       sodas:   room.sodas.map(s=>({x:s.x, y:s.y})),
+      powerups: room.powerups.map(pu=>({x:pu.x, y:pu.y, type:pu.type})),
       turrets: room.turrets.map(t=>({x:t.x, y:t.y, angle:t.angle||0, hp:t.hp, maxHp:C.TURRET_HP, owner:t.owner})),
       pets:    room.pets.map(pt=>({x:pt.x, y:pt.y, hp:pt.hp, maxHp:C.PET_HP, msLeft: Math.max(0, pt.expiresAt - now), owner:pt.owner})),
     });

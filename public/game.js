@@ -1229,6 +1229,24 @@ socket.on('heal', ({ id, amount }) => {
   damageNumbers.push({ id, dmg: -amount, t: Date.now(), seed: Math.random() });
 });
 
+socket.on('powerup', ({ id, type }) => {
+  // Rising 3-note arpeggio when anyone grabs a power-up (louder for self).
+  if (AUD.ctx && !AUD.muted) {
+    const t = AUD.ctx.currentTime + 0.01;
+    const self = id === socket.id;
+    const base = type === 'damage' ? 60 : (type === 'shield' ? 64 : 67);
+    const gain = self ? 0.28 : 0.12;
+    [0, 4, 7].forEach((semi, i) => {
+      AUD.playNote(base + semi, t + i * 0.06, 0.18, 'square', AUD.sfxGain, gain);
+    });
+  }
+  if (id === socket.id) {
+    const label = type === 'speed' ? '⚡ HIZ' : (type === 'damage' ? '⨯2 HASAR' : '🛡 KALKAN');
+    state.killfeed.unshift({ killer: '', victim: '', t: Date.now(), note: label });
+    if (state.killfeed.length > 6) state.killfeed.pop();
+  }
+});
+
 socket.on('kill', ({ killer, victim }) => {
   state.killfeed.unshift({ killer, victim, t: Date.now() });
   if (state.killfeed.length > 6) state.killfeed.pop();
@@ -1347,7 +1365,7 @@ function renderHUD() {
     kf.innerHTML = '';
     state.killfeed.forEach(k => {
       const d = document.createElement('div');
-      d.textContent = `${k.killer} > ${k.victim}`;
+      d.textContent = k.note ? k.note : `${k.killer} > ${k.victim}`;
       kf.appendChild(d);
     });
   }
@@ -1451,6 +1469,56 @@ function drawSoda(ctx, x, y) {
   } else {
     ctx.fillStyle = '#c43030'; ctx.fillRect(x-6, y-10, 12, 20);
     ctx.fillStyle = '#fff'; ctx.fillRect(x-6, y-2, 12, 4);
+  }
+  ctx.restore();
+}
+
+// Power-up visual config: color + a simple pixel glyph drawn on a floating orb.
+const POWERUP_STYLE = {
+  speed:  { color: '#34d6ff', glow: '#0090d0' },
+  damage: { color: '#ff5a3c', glow: '#c02000' },
+  shield: { color: '#5aa0ff', glow: '#2050c0' },
+};
+function drawPowerup(ctx, x, y, type) {
+  const st = POWERUP_STYLE[type] || POWERUP_STYLE.speed;
+  const bob = Math.sin(Date.now() / 300) * 2;
+  const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 200);
+  ctx.save();
+  // ground shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath(); ctx.ellipse(x, y+11, 11, 4, 0, 0, Math.PI*2); ctx.fill();
+  const cy = y + bob;
+  // outer glow ring
+  ctx.globalAlpha = 0.25 + pulse * 0.25;
+  ctx.fillStyle = st.glow;
+  ctx.beginPath(); ctx.arc(x, cy, 15 + pulse * 3, 0, Math.PI*2); ctx.fill();
+  // orb body
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#11131c';
+  ctx.beginPath(); ctx.arc(x, cy, 11, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = st.color;
+  ctx.beginPath(); ctx.arc(x, cy, 9, 0, Math.PI*2); ctx.fill();
+  // glyph
+  ctx.fillStyle = '#0a0a12';
+  if (type === 'speed') {
+    // lightning bolt
+    ctx.beginPath();
+    ctx.moveTo(x+1, cy-6); ctx.lineTo(x-4, cy+1); ctx.lineTo(x-1, cy+1);
+    ctx.lineTo(x-1, cy+6); ctx.lineTo(x+4, cy-1); ctx.lineTo(x+1, cy-1);
+    ctx.closePath(); ctx.fill();
+  } else if (type === 'damage') {
+    // up-arrow (power)
+    ctx.beginPath();
+    ctx.moveTo(x, cy-6); ctx.lineTo(x+5, cy+1); ctx.lineTo(x+2, cy+1);
+    ctx.lineTo(x+2, cy+6); ctx.lineTo(x-2, cy+6); ctx.lineTo(x-2, cy+1);
+    ctx.lineTo(x-5, cy+1); ctx.closePath(); ctx.fill();
+  } else {
+    // shield outline
+    ctx.beginPath();
+    ctx.moveTo(x, cy-6); ctx.lineTo(x+5, cy-4); ctx.lineTo(x+5, cy+1);
+    ctx.quadraticCurveTo(x+5, cy+5, x, cy+7);
+    ctx.quadraticCurveTo(x-5, cy+5, x-5, cy+1);
+    ctx.lineTo(x-5, cy-4); ctx.closePath(); ctx.fill();
   }
   ctx.restore();
 }
@@ -1778,6 +1846,9 @@ function render() {
   if (ss.sodas) {
     for (const s of ss.sodas) drawSoda(gctx, s.x-camX, s.y-camY);
   }
+  if (ss.powerups) {
+    for (const pu of ss.powerups) drawPowerup(gctx, pu.x-camX, pu.y-camY, pu.type);
+  }
 
   // bullets / rockets
   for (const b of ss.bullets) {
@@ -1921,6 +1992,22 @@ function render() {
       gctx.fillStyle = `rgba(255,80,90,${tankAlpha})`;
       gctx.beginPath(); gctx.arc(px, py, 36, 0, Math.PI*2); gctx.fill();
     }
+    // Power-up auras (ring around buffed players)
+    if (p.shieldMs > 0) {
+      const a = 0.5 + 0.4 * Math.sin(Date.now()/140);
+      gctx.strokeStyle = `rgba(90,160,255,${a})`;
+      gctx.lineWidth = 3;
+      gctx.beginPath(); gctx.arc(px, py, 24, 0, Math.PI*2); gctx.stroke();
+    }
+    if (p.dmgMs > 0) {
+      gctx.fillStyle = `rgba(255,90,60,${tankPulse*0.22})`;
+      gctx.beginPath(); gctx.arc(px, py, 22, 0, Math.PI*2); gctx.fill();
+    }
+    if (p.speedMs > 0) {
+      gctx.strokeStyle = `rgba(52,214,255,${0.4+0.3*tankPulse})`;
+      gctx.lineWidth = 2;
+      gctx.beginPath(); gctx.arc(px, py, 20, 0, Math.PI*2); gctx.stroke();
+    }
     if (p.tank) {
       gctx.save();
       gctx.translate(px, py);
@@ -1942,6 +2029,27 @@ function render() {
   }
 
   drawDamageNumbers(ss);
+
+  // Active power-up buffs for the local player (bottom-left badges)
+  const meBuff = ss.players.find(p => p.id === socket.id);
+  if (meBuff) {
+    const buffs = [];
+    if (meBuff.speedMs  > 0) buffs.push({ c: '#34d6ff', t: '⚡', ms: meBuff.speedMs });
+    if (meBuff.dmgMs    > 0) buffs.push({ c: '#ff5a3c', t: '⨯2', ms: meBuff.dmgMs });
+    if (meBuff.shieldMs > 0) buffs.push({ c: '#5aa0ff', t: '🛡', ms: meBuff.shieldMs });
+    let bx = 16, by = H - 60;
+    gctx.textAlign = 'left';
+    gctx.font = '12px "Press Start 2P",monospace';
+    for (const b of buffs) {
+      gctx.fillStyle = 'rgba(0,0,0,0.55)';
+      gctx.fillRect(bx, by, 74, 22);
+      gctx.fillStyle = b.c;
+      gctx.fillRect(bx, by, 4, 22);
+      gctx.fillText(b.t + ' ' + Math.ceil(b.ms/1000) + 's', bx + 10, by + 16);
+      by -= 28;
+    }
+    gctx.textAlign = 'center';
+  }
 
   // crosshair
   gctx.strokeStyle='#ffd24a'; gctx.lineWidth=2;
