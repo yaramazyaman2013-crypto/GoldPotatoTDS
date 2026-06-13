@@ -2182,6 +2182,16 @@ function render() {
       drawCrate(gctx, cx, cy, cr.hp/cr.maxHp);
     }
   }
+  if (ss.zones) {
+    for (const z of ss.zones) {
+      const zx = z.x-camX, zy = z.y-camY;
+      const wob = 0.12 + 0.05*Math.sin(Date.now()/150);
+      gctx.fillStyle = `rgba(90,170,255,${wob})`;
+      gctx.beginPath(); gctx.arc(zx, zy, z.r, 0, Math.PI*2); gctx.fill();
+      gctx.strokeStyle = 'rgba(120,200,255,0.4)'; gctx.lineWidth = 2;
+      gctx.beginPath(); gctx.arc(zx, zy, z.r, 0, Math.PI*2); gctx.stroke();
+    }
+  }
   if (ss.monsters) {
     for (const m of ss.monsters) {
       const mx = m.x-camX, my = m.y-camY;
@@ -2257,6 +2267,29 @@ function render() {
       gctx.fillStyle = '#d8d8e0'; gctx.fillRect(-5, -3, 10, 6);
       gctx.fillStyle = '#ff4654'; gctx.beginPath();
       gctx.moveTo(5, -3); gctx.lineTo(10, 0); gctx.lineTo(5, 3); gctx.fill();
+      gctx.restore();
+    } else if (b.type === 'wand') {
+      gctx.fillStyle = 'rgba(120,220,255,0.5)'; gctx.beginPath(); gctx.arc(x, y, 6, 0, Math.PI*2); gctx.fill();
+      gctx.fillStyle = '#bfefff'; gctx.beginPath(); gctx.arc(x, y, 3, 0, Math.PI*2); gctx.fill();
+    } else if (b.type === 'knife') {
+      gctx.save(); gctx.translate(x, y); gctx.rotate(b.angle||0);
+      gctx.fillStyle = '#dfe4ec'; gctx.fillRect(-7, -1.5, 14, 3);
+      gctx.fillStyle = '#9aa3b2'; gctx.fillRect(-7, -1.5, 4, 3);
+      gctx.restore();
+    } else if (b.type === 'axe') {
+      gctx.save(); gctx.translate(x, y); gctx.rotate(b.angle||0);
+      gctx.fillStyle = '#6a4a2a'; gctx.fillRect(-1.5, -8, 3, 16);
+      gctx.fillStyle = '#cfd6e0'; gctx.beginPath();
+      gctx.moveTo(0,-8); gctx.lineTo(8,-5); gctx.lineTo(8,-1); gctx.lineTo(0,-2); gctx.fill();
+      gctx.beginPath(); gctx.moveTo(0,-8); gctx.lineTo(-8,-5); gctx.lineTo(-8,-1); gctx.lineTo(0,-2); gctx.fill();
+      gctx.restore();
+    } else if (b.type === 'fireball') {
+      const fp = 0.5 + 0.5*Math.sin(Date.now()/80);
+      gctx.fillStyle = `rgba(255,120,20,${0.5+fp*0.3})`; gctx.beginPath(); gctx.arc(x, y, 9+fp*2, 0, Math.PI*2); gctx.fill();
+      gctx.fillStyle = '#ffe070'; gctx.beginPath(); gctx.arc(x, y, 4, 0, Math.PI*2); gctx.fill();
+    } else if (b.type === 'cross') {
+      gctx.save(); gctx.translate(x, y); gctx.rotate(Date.now()/120);
+      gctx.fillStyle = '#ffd24a'; gctx.fillRect(-2, -8, 4, 16); gctx.fillRect(-8, -2, 16, 4);
       gctx.restore();
     } else {
       gctx.fillStyle='#000'; gctx.fillRect(x-3,y-3,6,6);
