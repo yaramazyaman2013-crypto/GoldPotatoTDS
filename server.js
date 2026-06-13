@@ -451,7 +451,7 @@ function newRoom(ownerSocketId, ownerName, ownerColor, ownerCls, mapName, mode) 
     walls: getMapWalls(mapName),
     players: new Map(),
     bullets: [], hearts: [], rocketPickups: [], sodas: [], powerups: [],
-    monsters: [], gems: [], survItems: [], crates: [],
+    monsters: [], gems: [], survItems: [], crates: [], zones: [],
     lastItemSpawn: 0, lastBossSpawn: 0, lastCrateSpawn: 0, nextItemId: 1, nextCrateId: 1,
     turrets: [], pets: [],
     // Imposter mode
@@ -507,7 +507,9 @@ function addPlayer(room, id, name, color, cls) {
     pCrit: 0, pCritMul: 2, pBigBullet: 0, pExplode: 0, pKnock: 0,
     pArmor: 0, pArea: 1, pDuration: 1, pLuck: 0, pCurse: 0, pRevive: 0,
     wAura: 0, wOrbit: 0, wLightning: 0, wMissile: 0,
+    wWand: 0, wKnife: 0, wAxe: 0, wFire: 0, wHoly: 0, wCross: 0,
     auraAt: 0, lightningAt: 0, missileAt: 0, orbitAngle: 0, auraR: 0, orbs: null,
+    wandAt: 0, knifeAt: 0, axeAt: 0, fireAt: 0, holyAt: 0, crossAt: 0,
     // Imposter mode
     role: 'crew', tasks: [], killReadyAt: 0, emergencyUsed: 0,
     vented: false, ventGroup: null, ventId: 0,
@@ -601,7 +603,9 @@ function resetPerks(p) {
   p.pRevive = 0;     // extra lives on death (Tiragisú)
   // Vampire-Survivors auto-weapons (level 0 = not owned)
   p.wAura = 0; p.wOrbit = 0; p.wLightning = 0; p.wMissile = 0;
+  p.wWand = 0; p.wKnife = 0; p.wAxe = 0; p.wFire = 0; p.wHoly = 0; p.wCross = 0;
   p.auraAt = 0; p.lightningAt = 0; p.missileAt = 0; p.orbitAngle = 0;
+  p.wandAt = 0; p.knifeAt = 0; p.axeAt = 0; p.fireAt = 0; p.holyAt = 0; p.crossAt = 0;
   p.auraR = 0; p.orbs = null;
 }
 
@@ -700,6 +704,19 @@ const PERKS = [
   { id:'wings1', name:'Kanatlar', desc:'+%15 hareket hızı', icon:'🪽', apply:p=>p.pSpeed*=1.15 },
   { id:'tome1', name:'Boş Kitap', desc:'+%18 atış hızı (bekleme azalır)', icon:'📕', apply:p=>p.pFire*=0.82 },
   { id:'spinach1', name:'Ispanak', desc:'+%10 hasar (Güç)', icon:'🥬', apply:p=>p.pDmg*=1.1 },
+  // ---- Vampire-Survivors silahları (otomatik) ----
+  { id:'wand1', name:'Sihirli Değnek', desc:'En yakına otomatik atış', icon:'🪄', apply:p=>p.wWand+=1 },
+  { id:'wand2', name:'Sihirli Değnek+', desc:'Daha sık otomatik atış', icon:'🪄', apply:p=>p.wWand+=1 },
+  { id:'knife1', name:'Bıçak', desc:'Baktığın yöne delici bıçak', icon:'🔪', apply:p=>p.wKnife+=1 },
+  { id:'knife2', name:'Bıçak+', desc:'+1 bıçak, daha sık', icon:'🔪', apply:p=>p.wKnife+=1 },
+  { id:'axe1', name:'Balta', desc:'Yüksek hasarlı yay çizen balta', icon:'🪓', apply:p=>p.wAxe+=1 },
+  { id:'axe2', name:'Balta+', desc:'+1 balta', icon:'🪓', apply:p=>p.wAxe+=1 },
+  { id:'fire1w', name:'Ateş Asası', desc:'Patlayan ateş topu', icon:'🔥', apply:p=>p.wFire+=1 },
+  { id:'fire2w', name:'Ateş Asası+', desc:'Daha sık ateş topu', icon:'🔥', apply:p=>p.wFire+=1 },
+  { id:'holy1', name:'Kutsal Su', desc:'Yere hasar veren alan bırakır', icon:'💧', apply:p=>p.wHoly+=1 },
+  { id:'holy2', name:'Kutsal Su+', desc:'+1 alan, daha geniş', icon:'💧', apply:p=>p.wHoly+=1 },
+  { id:'cross1', name:'Bumerang Haç', desc:'Gidip dönen delici haç', icon:'✝️', apply:p=>p.wCross+=1 },
+  { id:'cross2', name:'Bumerang Haç+', desc:'Daha sık haç', icon:'✝️', apply:p=>p.wCross+=1 },
 ];
 
 function rollPerkChoices() {
@@ -965,7 +982,7 @@ function startRound(room) {
   }
   room.bullets = []; room.hearts = []; room.rocketPickups = []; room.sodas = [];
   room.powerups = [];
-  room.monsters = []; room.gems = []; room.survItems = []; room.crates = [];
+  room.monsters = []; room.gems = []; room.survItems = []; room.crates = []; room.zones = [];
   room.lastItemSpawn = Date.now(); room.lastBossSpawn = Date.now(); room.lastCrateSpawn = Date.now();
   room.nextItemId = 1; room.nextCrateId = 1;
   room.turrets = []; room.pets = [];
@@ -1405,6 +1422,51 @@ function survWeapons(room, p, now) {
       });
     }
   }
+  // Magic Wand: auto-bolt at the nearest enemy.
+  if (p.wWand > 0 && now - (p.wandAt||0) >= Math.max(350, 1100 - p.wWand*120)) {
+    let tgt=null,bd=620*620; for (const mo of ms){const d=(mo.x-p.x)**2+(mo.y-p.y)**2;if(d<bd){bd=d;tgt=mo;}}
+    if (tgt) { p.wandAt=now; const a=Math.atan2(tgt.y-p.y,tgt.x-p.x);
+      room.bullets.push({ id:room.nextBulletId++, owner:p.id, type:'wand', dmg:2+p.wWand, ownerCls:p.cls,
+        x:p.x, y:p.y, vx:Math.cos(a)*12, vy:Math.sin(a)*12, angle:a, life:60, pierce:0, rExtra:1*area }); }
+  }
+  // Knife: fast piercing knives in the facing direction.
+  if (p.wKnife > 0 && now - (p.knifeAt||0) >= Math.max(300, 900 - p.wKnife*100)) {
+    p.knifeAt=now; const count=p.wKnife; const base=p.angle||0;
+    for (let k=0;k<count;k++){ const a=base+(k-(count-1)/2)*0.1;
+      room.bullets.push({ id:room.nextBulletId++, owner:p.id, type:'knife', dmg:2+Math.ceil(p.wKnife*0.5), ownerCls:p.cls,
+        x:p.x, y:p.y, vx:Math.cos(a)*16, vy:Math.sin(a)*16, angle:a, life:55, pierce:1+p.wKnife }); }
+  }
+  // Axe: high-damage arcing throw (affected by gravity).
+  if (p.wAxe > 0 && now - (p.axeAt||0) >= Math.max(700, 1800 - p.wAxe*180)) {
+    p.axeAt=now; const count=p.wAxe;
+    for (let k=0;k<count;k++){ const a=-Math.PI/2 + (k-(count-1)/2)*0.4;
+      room.bullets.push({ id:room.nextBulletId++, owner:p.id, type:'axe', dmg:8+p.wAxe*3, ownerCls:p.cls,
+        x:p.x, y:p.y, vx:Math.cos(a)*6 + (Math.random()*4-2), vy:Math.sin(a)*13, angle:a, life:80,
+        gravity:0.45, pierce:2+p.wAxe, rExtra:3*area }); }
+  }
+  // Fire Wand: fireball at a random enemy, explodes on impact.
+  if (p.wFire > 0 && now - (p.fireAt||0) >= Math.max(600, 1600 - p.wFire*170)) {
+    if (ms.length) { p.fireAt=now; const mo=ms[Math.floor(Math.random()*ms.length)];
+      const a=Math.atan2(mo.y-p.y,mo.x-p.x);
+      room.bullets.push({ id:room.nextBulletId++, owner:p.id, type:'fireball', dmg:5+p.wFire*2, ownerCls:p.cls,
+        x:p.x, y:p.y, vx:Math.cos(a)*8, vy:Math.sin(a)*8, angle:a, life:70, explode:(60+p.wFire*8)*area, rExtra:2*area }); }
+  }
+  // Holy Water: drop damaging zones on the ground near random enemies.
+  if (p.wHoly > 0 && now - (p.holyAt||0) >= Math.max(1500, 3000 - p.wHoly*250)) {
+    p.holyAt=now; const drops=p.wHoly;
+    for (let k=0;k<drops;k++){ let zx=p.x+(Math.random()*300-150), zy=p.y+(Math.random()*300-150);
+      if (ms.length){ const mo=ms[Math.floor(Math.random()*ms.length)]; zx=mo.x; zy=mo.y; }
+      room.zones.push({ x:zx, y:zy, r:(60+p.wHoly*12)*area, until:now+4000, dmgAt:0,
+        dmg:1+Math.ceil(p.wHoly*0.5), owner:p.id }); }
+  }
+  // Cross: boomerang projectile that flies out then returns.
+  if (p.wCross > 0 && now - (p.crossAt||0) >= Math.max(700, 1700 - p.wCross*180)) {
+    let tgt=null,bd=600*600; for (const mo of ms){const d=(mo.x-p.x)**2+(mo.y-p.y)**2;if(d<bd){bd=d;tgt=mo;}}
+    const a = tgt ? Math.atan2(tgt.y-p.y,tgt.x-p.x) : (p.angle||0);
+    p.crossAt=now;
+    room.bullets.push({ id:room.nextBulletId++, owner:p.id, type:'cross', dmg:3+p.wCross*2, ownerCls:p.cls,
+      x:p.x, y:p.y, vx:Math.cos(a)*10, vy:Math.sin(a)*10, angle:a, life:90, pierce:99, boomerang:1, rExtra:2*area });
+  }
 }
 
 function applyDamage(room, victim, dmg, killerId) {
@@ -1733,6 +1795,18 @@ function tick(room) {
     }
     // Defensive cap on gems
     if (room.gems.length > 400) room.gems.splice(0, room.gems.length - 400);
+    // Holy Water zones: damage monsters standing inside, then expire.
+    for (let zi = room.zones.length-1; zi >= 0; zi--) {
+      const z = room.zones[zi];
+      if (now >= z.until) { room.zones.splice(zi, 1); continue; }
+      if (now >= (z.dmgAt||0)) {
+        z.dmgAt = now + 350;
+        for (let mi = room.monsters.length-1; mi >= 0; mi--) {
+          const mo = room.monsters[mi];
+          if ((mo.x-z.x)**2 + (mo.y-z.y)**2 < z.r*z.r) damageMonster(room, mo, z.dmg, z.owner);
+        }
+      }
+    }
   }
 
   // Pets: heal nearby allies, expire after duration
@@ -1829,6 +1903,27 @@ function tick(room) {
         cur += Math.max(-0.2, Math.min(0.2, diff));
         const sp = Math.hypot(b.vx, b.vy);
         b.vx = Math.cos(cur)*sp; b.vy = Math.sin(cur)*sp; b.angle = cur;
+      }
+    }
+    // Axe gravity
+    if (b.gravity) { b.vy += b.gravity; b.angle = (b.angle||0) + 0.4; }
+    // Cross boomerang: after a moment, curve back toward the owner.
+    if (b.boomerang && room.mode === 'survival') {
+      const ow = room.players.get(b.owner);
+      if (ow) {
+        b.boomerang++;
+        if (b.boomerang > 28) {
+          const desired = Math.atan2(ow.y-b.y, ow.x-b.x);
+          let cur = Math.atan2(b.vy, b.vx);
+          let diff = desired - cur;
+          while (diff > Math.PI) diff -= Math.PI*2;
+          while (diff < -Math.PI) diff += Math.PI*2;
+          cur += Math.max(-0.35, Math.min(0.35, diff));
+          const sp = Math.hypot(b.vx, b.vy);
+          b.vx = Math.cos(cur)*sp; b.vy = Math.sin(cur)*sp; b.angle = cur;
+          // despawn when it returns to the owner
+          if ((ow.x-b.x)**2 + (ow.y-b.y)**2 < 30*30) { room.bullets.splice(i,1); continue; }
+        }
       }
     }
     b.x += b.vx; b.y += b.vy; b.life--;
@@ -2022,6 +2117,7 @@ function tick(room) {
       gems: room.gems.map(g=>({x:g.x, y:g.y, val:g.val})),
       survItems: room.survItems.map(it=>({x:it.x, y:it.y, type:it.type})),
       crates: room.crates.map(cr=>({x:cr.x, y:cr.y, hp:cr.hp, maxHp:cr.maxHp})),
+      zones: room.zones.map(z=>({x:z.x, y:z.y, r:z.r})),
       turrets: room.turrets.map(t=>({x:t.x, y:t.y, angle:t.angle||0, hp:t.hp, maxHp:C.TURRET_HP, owner:t.owner})),
       pets:    room.pets.map(pt=>({x:pt.x, y:pt.y, hp:pt.hp, maxHp:C.PET_HP, msLeft: Math.max(0, pt.expiresAt - now), owner:pt.owner})),
     });
