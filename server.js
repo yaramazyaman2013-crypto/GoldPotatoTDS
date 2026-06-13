@@ -105,6 +105,19 @@ const C = {
   DAMAGE_BUFF_MS:       8000,
   DAMAGE_BUFF_MUL:      2,
   SHIELD_BUFF_MS:       6000,
+  // Survival mode (Vampire-Survivors-like co-op vs endless monster waves)
+  SURV_SPAWN_START_MS:  1400,   // initial gap between spawn batches
+  SURV_SPAWN_MIN_MS:    260,    // fastest spawn gap
+  SURV_MAX_MONSTERS:    240,
+  SURV_MON_SPEED:       1.7,
+  SURV_MON_HP:          3,
+  SURV_MON_DMG:         1,
+  SURV_MON_CONTACT_CD:  650,    // ms between contact hits from one monster
+  SURV_MON_R:           12,
+  SURV_MON_XP:          1,
+  SURV_GEM_MAGNET_R:    140,
+  SURV_LEVEL_BASE_XP:   5,      // xp needed for level 2
+  SURV_LEVEL_GROWTH:    1.35,   // xp curve multiplier per level
   // Turret
   TURRET_HP: 32,
   TURRET_MOVE_SPEED: 3.2,
@@ -320,20 +333,25 @@ function makeCode() {
   return s;
 }
 
-function newRoom(ownerSocketId, ownerName, ownerColor, ownerCls, mapName) {
+const VALID_MODES = ['ffa', 'survival'];
+
+function newRoom(ownerSocketId, ownerName, ownerColor, ownerCls, mapName, mode) {
   let code;
   do { code = makeCode(); } while (rooms.has(code));
   const room = {
     code, ownerId: ownerSocketId,
     started: false,
+    mode: VALID_MODES.includes(mode) ? mode : 'ffa',
     mapName: mapName || 'default',
     walls: getMapWalls(mapName),
     players: new Map(),
     bullets: [], hearts: [], rocketPickups: [], sodas: [], powerups: [],
+    monsters: [], gems: [],
     turrets: [], pets: [],
     roundEndsAt: 0, remainingMs: 0, lastHeartSpawn: 0, lastRocketSpawn: 0,
-    lastPowerupSpawn: 0,
+    lastPowerupSpawn: 0, lastMonsterSpawn: 0, survStartAt: 0,
     nextBulletId: 1, nextHeartId: 1, nextRocketId: 1, nextPowerupId: 1,
+    nextMonsterId: 1, nextGemId: 1,
     nextTurretId: 1, nextPetId: 1,
     tickHandle: null, pendingRestart: null,
     tickCount: 0,
@@ -372,6 +390,8 @@ function addPlayer(room, id, name, color, cls) {
     tankKills: 0, // resets each round; counts kills since last tank form
     // Power-up buff timers (epoch ms; buff active while now < value)
     speedUntil: 0, dmgUntil: 0, shieldUntil: 0,
+    // Survival mode progression
+    xp: 0, level: 1, xpToNext: C.SURV_LEVEL_BASE_XP,
   };
   room.players.set(id, player);
 }
@@ -380,6 +400,7 @@ function publicRoom(room) {
   return {
     id: room.code, ownerId: room.ownerId,
     started: room.started,
+    mode: room.mode,
     mapName: room.mapName,
     count: room.players.size, max: C.MAX_PLAYERS,
     players: [...room.players.values()].map(p => ({
@@ -442,6 +463,93 @@ function spawnPowerup(room) {
   }
 }
 
+// Survival: per-level stat multipliers derived from a player's level.
+function survBonus(level) {
+  const l = Math.max(1, level || 1);
+  return {
+    dmgMul:   1 + 0.15 * (l - 1),                 // +15% damage / level
+    fireMul:  Math.max(0.45, 1 - 0.045 * (l - 1)),// faster fire (down to ~2.2x)
+    speedMul: Math.min(1.5, 1 + 0.02 * (l - 1)),  // +2% move / level (cap +50%)
+  };
+}
+
+// Survival: difficulty scales with minutes elapsed.
+function survDifficulty(room, now) {
+  const mins = Math.max(0, (now - room.survStartAt) / 60000);
+  return {
+    mins,
+    hp:    C.SURV_MON_HP + Math.floor(mins * 2),
+    speed: C.SURV_MON_SPEED + mins * 0.14,
+    dmg:   C.SURV_MON_DMG + Math.floor(mins / 3),
+    interval: Math.max(C.SURV_SPAWN_MIN_MS, C.SURV_SPAWN_START_MS - mins * 110),
+    batch: 1 + Math.floor(mins / 1.5),
+  };
+}
+
+// Spawn one monster just inside a random map edge.
+function spawnMonster(room, diff) {
+  if (room.monsters.length >= C.SURV_MAX_MONSTERS) return;
+  const edge = Math.floor(Math.random() * 4);
+  let x, y;
+  const m = 24;
+  if (edge === 0)      { x = m + Math.random() * (C.MAP_W - 2*m); y = m; }
+  else if (edge === 1) { x = m + Math.random() * (C.MAP_W - 2*m); y = C.MAP_H - m; }
+  else if (edge === 2) { x = m; y = m + Math.random() * (C.MAP_H - 2*m); }
+  else                 { x = C.MAP_W - m; y = m + Math.random() * (C.MAP_H - 2*m); }
+  // Occasional tougher "elite" (bigger, more hp, more xp)
+  const elite = diff.mins > 1 && Math.random() < 0.06;
+  room.monsters.push({
+    id: room.nextMonsterId++, x, y,
+    hp: elite ? diff.hp * 4 : diff.hp,
+    maxHp: elite ? diff.hp * 4 : diff.hp,
+    speed: elite ? diff.speed * 0.8 : diff.speed,
+    dmg: elite ? diff.dmg * 2 : diff.dmg,
+    r: elite ? C.SURV_MON_R + 7 : C.SURV_MON_R,
+    xp: elite ? 6 : C.SURV_MON_XP,
+    elite, nextHitAt: 0,
+  });
+}
+
+function dropGem(room, x, y, val) {
+  room.gems.push({ id: room.nextGemId++, x, y, val });
+}
+
+// Outgoing damage from a shooter to a monster, including buffs & survival level.
+function outgoingDmg(room, ownerId, baseDmg) {
+  const killer = room.players.get(ownerId);
+  let dmg = baseDmg || 1;
+  if (killer) {
+    if (Date.now() < killer.dmgUntil) dmg *= C.DAMAGE_BUFF_MUL;
+    if (room.mode === 'survival') dmg *= survBonus(killer.level).dmgMul;
+  }
+  return Math.max(1, Math.ceil(dmg));
+}
+
+// Apply damage to a monster; on death drop an XP gem and credit the killer.
+function damageMonster(room, mo, dmg, ownerId) {
+  mo.hp -= dmg;
+  if (mo.hp <= 0) {
+    const idx = room.monsters.indexOf(mo);
+    if (idx >= 0) room.monsters.splice(idx, 1);
+    dropGem(room, mo.x, mo.y, mo.xp);
+    const killer = room.players.get(ownerId);
+    if (killer) killer.kills++;
+    return true;
+  }
+  return false;
+}
+
+// Award xp and handle level-ups for a survival player.
+function grantXp(room, p, amount) {
+  p.xp += amount;
+  while (p.xp >= p.xpToNext) {
+    p.xp -= p.xpToNext;
+    p.level++;
+    p.xpToNext = Math.round(C.SURV_LEVEL_BASE_XP * Math.pow(C.SURV_LEVEL_GROWTH, p.level - 1));
+    io.to(room.code).emit('levelUp', { id: p.id, level: p.level });
+  }
+}
+
 function cloneWalls(src) {
   // Per-round room copy: mesh walls get hp; assign ids; build spatial index.
   // Mesh rects (legacy maps saved before NO_MERGE) get split into 1-cell
@@ -482,10 +590,14 @@ function startRound(room) {
   room.walls = cloneWalls(getMapWalls(room.mapName));
   room.bullets = []; room.hearts = []; room.rocketPickups = []; room.sodas = [];
   room.powerups = [];
+  room.monsters = []; room.gems = [];
   room.turrets = []; room.pets = [];
   room.roundEndsAt = Date.now() + C.ROUND_MS;
   room.remainingMs = C.ROUND_MS;
   const now = Date.now();
+  room.survStartAt = now;
+  room.lastMonsterSpawn = now;
+  room.nextMonsterId = 1; room.nextGemId = 1;
   room.lastHeartSpawn = now;
   room.lastRocketSpawn = now;
   room.lastSodaSpawn = now;
@@ -507,11 +619,13 @@ function startRound(room) {
     p.heartReadyAt = now + C.MEDIC_HEART_CD;
     p.tankUntil = 0; p.tankKills = 0;
     p.speedUntil = 0; p.dmgUntil = 0; p.shieldUntil = 0;
+    p.xp = 0; p.level = 1; p.xpToNext = C.SURV_LEVEL_BASE_XP;
   }
   for (let i = 0; i < 4; i++) spawnHeart(room);
   spawnRocketPickup(room);
   io.to(room.code).emit('roundStart', {
     endsAt: room.roundEndsAt,
+    mode: room.mode,
     mapW: C.MAP_W, mapH: C.MAP_H, walls: room.walls,
     mapName: room.mapName,
     groundColor: room.groundColor || '#4a6a3a',
@@ -525,9 +639,10 @@ function endRound(room) {
   room.started = false;
   if (room.tickHandle) { clearInterval(room.tickHandle); room.tickHandle = null; }
   const board = [...room.players.values()]
-    .map(p => ({id:p.id,name:p.name,kills:p.kills,color:p.color}))
+    .map(p => ({id:p.id,name:p.name,kills:p.kills,color:p.color,level:p.level}))
     .sort((a,b)=>b.kills-a.kills);
-  io.to(room.code).emit('roundEnd', {board, winner: board[0]||null});
+  const survivalMs = room.mode === 'survival' ? Math.max(0, Date.now() - room.survStartAt) : 0;
+  io.to(room.code).emit('roundEnd', {board, winner: board[0]||null, mode: room.mode, survivalMs});
   if (room.pendingRestart) clearTimeout(room.pendingRestart);
   room.pendingRestart = setTimeout(() => {
     if (rooms.has(room.code) && room.players.size > 0) startRound(room);
@@ -537,6 +652,11 @@ function endRound(room) {
 function checkRoundOver(room) {
   if (!room.started) return;
   const alive = [...room.players.values()].filter(p=>p.alive);
+  if (room.mode === 'survival') {
+    // Co-op: round only ends when everyone is down (endless otherwise).
+    if (alive.length === 0) return endRound(room);
+    return;
+  }
   if (alive.length <= 1 && room.players.size > 1) return endRound(room);
   if (alive.length === 0) return endRound(room);
   if (room.remainingMs <= 0) return endRound(room);
@@ -579,7 +699,7 @@ function applyDamage(room, victim, dmg, killerId) {
         }
       }
     }
-    io.to(room.code).emit('kill', {killer: killer?killer.name:'?', victim: victim.name});
+    io.to(room.code).emit('kill', {killer: killer ? killer.name : (room.mode === 'survival' ? '🧟' : '?'), victim: victim.name});
     if (victim.lives <= 0) { victim.alive = false; }
     else {
       const s = randomSpawnIn(room.walls);
@@ -612,6 +732,18 @@ function tick(room) {
     spawnPowerup(room); room.lastPowerupSpawn = now;
   }
 
+  // Survival: spawn monster waves whose rate & strength ramp over time.
+  let survDiff = null;
+  if (room.mode === 'survival') {
+    survDiff = survDifficulty(room, now);
+    if (now - room.lastMonsterSpawn >= survDiff.interval) {
+      const alivePlayers = [...room.players.values()].filter(p => p.alive).length || 1;
+      const n = survDiff.batch + (alivePlayers - 1);
+      for (let i = 0; i < n; i++) spawnMonster(room, survDiff);
+      room.lastMonsterSpawn = now;
+    }
+  }
+
   for (const p of room.players.values()) {
     if (!p.alive) continue;
 
@@ -627,8 +759,10 @@ function tick(room) {
     }
     // Tank mode expiry
     const isTank = now < p.tankUntil;
+    const sb = room.mode === 'survival' ? survBonus(p.level) : null;
+    const fireMul = sb ? sb.fireMul : 1;
     const speedBuff = now < p.speedUntil ? C.SPEED_BUFF_MUL : 1;
-    const speedMul = speedBuff * (isTank ? 0.7 : (p.cls === 'pyro' ? 1.2 : (p.cls === 'sniper' ? 1.5 : 1)));
+    const speedMul = speedBuff * (sb ? sb.speedMul : 1) * (isTank ? 0.7 : (p.cls === 'pyro' ? 1.2 : (p.cls === 'sniper' ? 1.5 : 1)));
     const playerR = isTank ? C.PLAYER_R + 12 : C.PLAYER_R;
 
     let dx = 0, dy = 0;
@@ -646,7 +780,7 @@ function tick(room) {
 
     // Right click = rocket (if available)
     if (p.rightDown && p.fireCd <= 0 && p.rockets > 0) {
-      p.fireCd = C.ROCKET_FIRE_COOLDOWN; p.rockets--;
+      p.fireCd = C.ROCKET_FIRE_COOLDOWN * fireMul; p.rockets--;
       const rspeed = p.cls === 'cyber' ? C.CYBER_ROCKET_SPEED : C.ROCKET_SPEED;
       const m = 22;
       room.bullets.push({
@@ -659,7 +793,7 @@ function tick(room) {
     // Left click = bullet (pyro uses flame instead)
     if (p.leftDown && p.fireCd <= 0 && !p.reloading) {
       if (p.cls === 'pyro' && p.ammo > 0) {
-        p.fireCd = C.PYRO_FLAME_CD;
+        p.fireCd = C.PYRO_FLAME_CD * fireMul;
         p.ammo--;
         const m = 20;
         room.bullets.push({
@@ -670,7 +804,7 @@ function tick(room) {
         });
         if (p.ammo === 0) { p.reloading = true; p.reloadEndsAt = now + C.PYRO_REFUEL_MS; }
       } else if (p.cls === 'sniper' && p.ammo > 0) {
-        p.fireCd = C.SNIPER_FIRE_CD;
+        p.fireCd = C.SNIPER_FIRE_CD * fireMul;
         p.ammo--;
         const m = 20;
         room.bullets.push({
@@ -681,7 +815,7 @@ function tick(room) {
         });
         p.reloading = true; p.reloadEndsAt = now + C.SNIPER_RELOAD_MS;
       } else if (p.ammo > 0) {
-        p.fireCd = isTank ? Math.floor(C.FIRE_COOLDOWN * 0.6) : C.FIRE_COOLDOWN;
+        p.fireCd = (isTank ? Math.floor(C.FIRE_COOLDOWN * 0.6) : C.FIRE_COOLDOWN) * fireMul;
         p.ammo--;
         const m = 20;
         const bulletDmg = isTank ? 2 : 1;
@@ -731,6 +865,49 @@ function tick(room) {
         room.powerups.splice(i, 1);
       }
     }
+    // Survival: collect XP gems (wide magnet range)
+    if (room.mode === 'survival') {
+      for (let i = room.gems.length-1; i >= 0; i--) {
+        const g = room.gems[i];
+        const dx = p.x - g.x, dy = p.y - g.y;
+        const d2 = dx*dx + dy*dy;
+        if (d2 < C.SURV_GEM_MAGNET_R * C.SURV_GEM_MAGNET_R) {
+          const d = Math.sqrt(d2) || 1;
+          const step = Math.min(d, 7);
+          g.x += dx/d*step; g.y += dy/d*step;
+        }
+        if (d2 < (C.PLAYER_R+10)**2) {
+          grantXp(room, p, g.val || 1);
+          room.gems.splice(i, 1);
+        }
+      }
+    }
+  }
+
+  // Survival: monster AI — chase nearest alive player, deal contact damage.
+  if (room.mode === 'survival') {
+    const alive = [...room.players.values()].filter(pl => pl.alive);
+    for (let mi = room.monsters.length-1; mi >= 0; mi--) {
+      const mo = room.monsters[mi];
+      let target = null, bestD = Infinity;
+      for (const pl of alive) {
+        const d2 = (pl.x-mo.x)**2 + (pl.y-mo.y)**2;
+        if (d2 < bestD) { bestD = d2; target = pl; }
+      }
+      if (target) {
+        const d = Math.sqrt(bestD) || 1;
+        // ghosts ignore walls; just walk straight at the target
+        mo.x += (target.x-mo.x)/d * mo.speed;
+        mo.y += (target.y-mo.y)/d * mo.speed;
+        const hitR = mo.r + C.PLAYER_R;
+        if (bestD < hitR*hitR && now >= mo.nextHitAt) {
+          mo.nextHitAt = now + C.SURV_MON_CONTACT_CD;
+          applyDamage(room, target, mo.dmg, null);
+        }
+      }
+    }
+    // Defensive cap on gems
+    if (room.gems.length > 400) room.gems.splice(0, room.gems.length - 400);
   }
 
   // Pets: heal nearby allies, expire after duration
@@ -776,10 +953,17 @@ function tick(room) {
       }
     }
     let target = null, bestD = C.TURRET_RANGE * C.TURRET_RANGE;
-    for (const pl of room.players.values()) {
-      if (!pl.alive || pl.id === t.owner) continue;
-      const d2 = (pl.x-t.x)**2 + (pl.y-t.y)**2;
-      if (d2 < bestD) { bestD = d2; target = pl; }
+    if (room.mode === 'survival') {
+      for (const mo of room.monsters) {
+        const d2 = (mo.x-t.x)**2 + (mo.y-t.y)**2;
+        if (d2 < bestD) { bestD = d2; target = mo; }
+      }
+    } else {
+      for (const pl of room.players.values()) {
+        if (!pl.alive || pl.id === t.owner) continue;
+        const d2 = (pl.x-t.x)**2 + (pl.y-t.y)**2;
+        if (d2 < bestD) { bestD = d2; target = pl; }
+      }
     }
     if (target) {
       t.angle = Math.atan2(target.y-t.y, target.x-t.x);
@@ -830,8 +1014,23 @@ function tick(room) {
 
     if (!detonated) {
       let hitSomething = false;
-      // hit players
-      for (const p of room.players.values()) {
+      // Survival: bullets hit monsters (co-op, no PvP)
+      if (room.mode === 'survival') {
+        for (const mo of room.monsters) {
+          if ((mo.x-b.x)**2+(mo.y-b.y)**2 < (mo.r + r)**2) {
+            if (isRocket) { detonated = true; }
+            else {
+              damageMonster(room, mo, outgoingDmg(room, b.owner, b.dmg || 1), b.owner);
+              room.bullets.splice(i,1);
+              hitSomething = true;
+            }
+            break;
+          }
+        }
+        if (hitSomething) continue;
+      }
+      // hit players (PvP disabled in survival)
+      if (room.mode !== 'survival') for (const p of room.players.values()) {
         if (!p.alive || p.id===b.owner) continue;
         const pr = (Date.now() < p.tankUntil ? C.PLAYER_R + 12 : C.PLAYER_R);
         if ((p.x-b.x)**2+(p.y-b.y)**2 < (pr + r)**2) {
@@ -880,7 +1079,15 @@ function tick(room) {
     if (detonated && isRocket) {
       // splash damage
       io.to(room.code).emit('explosion', {x: b.x, y: b.y, r: C.ROCKET_AOE_R, color: b.ownerCls === 'cyber' ? 'cyber' : null});
-      for (const p of room.players.values()) {
+      if (room.mode === 'survival') {
+        const splash = outgoingDmg(room, b.owner, 10);
+        for (let mi = room.monsters.length-1; mi >= 0; mi--) {
+          const mo = room.monsters[mi];
+          if ((mo.x-b.x)**2 + (mo.y-b.y)**2 < C.ROCKET_AOE_R**2) {
+            damageMonster(room, mo, splash, b.owner);
+          }
+        }
+      } else for (const p of room.players.values()) {
         if (!p.alive) continue;
         const d2 = (p.x-b.x)**2 + (p.y-b.y)**2;
         if (d2 < C.ROCKET_AOE_R**2) {
@@ -905,6 +1112,8 @@ function tick(room) {
   if (room.tickCount % C.BROADCAST_EVERY === 0) {
     io.to(room.code).emit('state', {
       t: now, endsAt: room.roundEndsAt, msLeft: room.remainingMs,
+      mode: room.mode,
+      survivalMs: room.mode === 'survival' ? Math.max(0, now - room.survStartAt) : 0,
       players: [...room.players.values()].map(p => ({
         id:p.id, name:p.name, color:p.color, cls:p.cls, hat:p.hat, hatCfg:p.hatCfg,
         x:p.x, y:p.y, angle:p.angle,
@@ -923,6 +1132,7 @@ function tick(room) {
         speedMs:  Math.max(0, p.speedUntil  - now),
         dmgMs:    Math.max(0, p.dmgUntil    - now),
         shieldMs: Math.max(0, p.shieldUntil - now),
+        xp:p.xp, level:p.level, xpToNext:p.xpToNext,
         alive:p.alive, kills:p.kills,
       })),
       bullets: room.bullets.map(b=>({id:b.id, x:b.x, y:b.y, type:b.type||'bullet', angle:b.angle})),
@@ -930,6 +1140,8 @@ function tick(room) {
       rocketPickups: room.rocketPickups.map(r=>({x:r.x, y:r.y})),
       sodas:   room.sodas.map(s=>({x:s.x, y:s.y})),
       powerups: room.powerups.map(pu=>({x:pu.x, y:pu.y, type:pu.type})),
+      monsters: room.monsters.map(m=>({id:m.id, x:m.x, y:m.y, hp:m.hp, maxHp:m.maxHp, r:m.r, elite:m.elite})),
+      gems: room.gems.map(g=>({x:g.x, y:g.y, val:g.val})),
       turrets: room.turrets.map(t=>({x:t.x, y:t.y, angle:t.angle||0, hp:t.hp, maxHp:C.TURRET_HP, owner:t.owner})),
       pets:    room.pets.map(pt=>({x:pt.x, y:pt.y, hp:pt.hp, maxHp:C.PET_HP, msLeft: Math.max(0, pt.expiresAt - now), owner:pt.owner})),
     });
@@ -951,13 +1163,13 @@ const socketRoom = new Map(); // socketId -> roomCode
 io.on('connection', (socket) => {
   console.log('[+]', socket.id);
 
-  socket.on('createRoom', ({name, color, cls, mapName, customMap, groundColor}, ack) => {
+  socket.on('createRoom', ({name, color, cls, mapName, customMap, groundColor, mode}, ack) => {
     leaveCurrentRoom(socket);
     // Host may ship a custom map's walls inline (fetched from Supabase).
     if (customMap && Array.isArray(customMap) && mapName) {
       savedMaps.set(mapName, sanitizeWalls(customMap));
     }
-    const room = newRoom(socket.id, name, color, cls, mapName);
+    const room = newRoom(socket.id, name, color, cls, mapName, mode);
     if (typeof groundColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(groundColor)) {
       room.groundColor = groundColor;
     }
