@@ -108,8 +108,8 @@ const C = {
   // Survival mode (Vampire-Survivors-like co-op vs endless monster waves)
   SURV_MAP_W:           3600,   // survival uses a MUCH bigger arena
   SURV_MAP_H:           2700,
-  SURV_SPAWN_START_MS:  1800,   // initial gap between spawn batches
-  SURV_SPAWN_MIN_MS:    600,    // fastest spawn gap (fewer zombies overall)
+  SURV_SPAWN_START_MS:  1400,   // initial gap between spawn batches
+  SURV_SPAWN_MIN_MS:    500,    // fastest spawn gap (fewer zombies overall)
   SURV_MAX_MONSTERS:    80,     // hard cap on living zombies
   SURV_MON_SPEED:       1.6,
   SURV_MON_HP:          3,
@@ -117,10 +117,12 @@ const C = {
   SURV_MON_CONTACT_CD:  650,    // ms between contact hits from one monster
   SURV_MON_R:           12,
   SURV_MON_XP:          1,
-  SURV_GEM_MAGNET_R:    140,
-  SURV_LEVEL_BASE_XP:   5,      // xp needed for level 2
-  SURV_LEVEL_GROWTH:    1.35,   // xp curve multiplier per level
+  SURV_GEM_MAGNET_R:    230,    // wide auto-collect so XP is easy to pick up
+  SURV_LEVEL_BASE_XP:   4,      // xp needed for level 2
+  SURV_LEVEL_GROWTH:    1.22,   // gentler xp curve (faster leveling)
   SURV_RESPAWN_MS:      60 * 1000, // dead players come back after 60s
+  SURV_ITEM_EVERY:      22 * 1000, // special pickup spawn interval
+  SURV_BOSS_EVERY:      70 * 1000, // boss zombie interval
   // Turret
   TURRET_HP: 32,
   TURRET_MOVE_SPEED: 3.2,
@@ -222,14 +224,15 @@ function buildSurvivalMap(W, H) {
   const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
   // scattered pillars / blocks across the field, kept away from the
   // top-left spawn area (players spawn within ~1600x1200)
-  const tries = 90;
+  // Smaller, well-spaced blocks so big "elite" zombies don't wedge in corners.
+  const tries = 70;
   for (let i = 0; i < tries; i++) {
-    const bw = 40 + Math.floor(rnd() * 130);
-    const bh = 40 + Math.floor(rnd() * 130);
-    const x = 220 + Math.floor(rnd() * (W - 440 - bw));
-    const y = 220 + Math.floor(rnd() * (H - 440 - bh));
+    const bw = 36 + Math.floor(rnd() * 70);
+    const bh = 36 + Math.floor(rnd() * 70);
+    const x = 240 + Math.floor(rnd() * (W - 480 - bw));
+    const y = 240 + Math.floor(rnd() * (H - 480 - bh));
     // leave the immediate spawn pocket clear
-    if (x < 700 && y < 600) continue;
+    if (x < 740 && y < 640) continue;
     w.push({x, y, w: bw, h: bh});
   }
   return w;
@@ -447,7 +450,8 @@ function newRoom(ownerSocketId, ownerName, ownerColor, ownerCls, mapName, mode) 
     walls: getMapWalls(mapName),
     players: new Map(),
     bullets: [], hearts: [], rocketPickups: [], sodas: [], powerups: [],
-    monsters: [], gems: [],
+    monsters: [], gems: [], survItems: [],
+    lastItemSpawn: 0, lastBossSpawn: 0, nextItemId: 1,
     turrets: [], pets: [],
     // Imposter mode
     phase: 'play', corpses: [], meeting: null, sabotage: null,
@@ -694,11 +698,13 @@ function survDifficulty(room, now) {
   const mins = Math.max(0, (now - room.survStartAt) / 60000);
   return {
     mins,
-    hp:    C.SURV_MON_HP + Math.floor(mins * 2),
-    speed: C.SURV_MON_SPEED + mins * 0.12,
-    dmg:   C.SURV_MON_DMG + Math.floor(mins / 3),
-    interval: Math.max(C.SURV_SPAWN_MIN_MS, C.SURV_SPAWN_START_MS - mins * 90),
-    batch: 1 + Math.floor(mins / 3),
+    // Gentler scaling so zombies stay beatable in the late game.
+    hp:    C.SURV_MON_HP + Math.floor(mins * 1.2),
+    // Cap speed below the player's so they always stay kiteable.
+    speed: C.SURV_MON_SPEED + Math.min(1.2, mins * 0.07),
+    dmg:   C.SURV_MON_DMG + Math.floor(mins / 5),
+    interval: Math.max(C.SURV_SPAWN_MIN_MS, C.SURV_SPAWN_START_MS - mins * 80),
+    batch: 1 + Math.floor(mins / 4),
   };
 }
 
@@ -713,14 +719,14 @@ function spawnMonster(room, diff) {
   const alive = [...room.players.values()].filter(p => p.alive);
   if (alive.length) {
     const anchor = alive[Math.floor(Math.random() * alive.length)];
-    // spawn 760–1080px away (just beyond a typical viewport)
-    let tries = 8;
+    // spawn 760–1080px away (just beyond a typical viewport), in open space
+    let tries = 16;
     do {
       const a = Math.random() * Math.PI * 2;
       const dist = 760 + Math.random() * 320;
       x = Math.max(m, Math.min(MW - m, anchor.x + Math.cos(a) * dist));
       y = Math.max(m, Math.min(MH - m, anchor.y + Math.sin(a) * dist));
-    } while (hitsWallList(room.walls, x, y, C.SURV_MON_R) && --tries > 0);
+    } while (hitsWallList(room.walls, x, y, C.SURV_MON_R + 8) && --tries > 0);
   } else {
     const edge = Math.floor(Math.random() * 4);
     if (edge === 0)      { x = m + Math.random() * (MW - 2*m); y = m; }
@@ -746,6 +752,44 @@ function dropGem(room, x, y, val) {
   room.gems.push({ id: room.nextGemId++, x, y, val });
 }
 
+// Survival special pickups (Vampire-Survivors style map items).
+function spawnSurvItem(room) {
+  const alive = [...room.players.values()].filter(p => p.alive);
+  if (!alive.length) return;
+  const anchor = alive[Math.floor(Math.random() * alive.length)];
+  const MW = room.mapW || C.MAP_W, MH = room.mapH || C.MAP_H;
+  const types = ['chicken', 'magnet', 'bomb'];
+  const type = types[Math.floor(Math.random() * types.length)];
+  let x, y, tries = 16;
+  do {
+    const a = Math.random() * Math.PI * 2;
+    const dist = 240 + Math.random() * 360;
+    x = Math.max(40, Math.min(MW-40, anchor.x + Math.cos(a)*dist));
+    y = Math.max(40, Math.min(MH-40, anchor.y + Math.sin(a)*dist));
+  } while (hitsWallList(room.walls, x, y, 16) && --tries > 0);
+  room.survItems.push({ id: room.nextItemId++, x, y, type });
+}
+
+// Boss zombie: huge, tanky, drops a burst of XP gems on death.
+function spawnBoss(room, diff) {
+  const MW = room.mapW || C.MAP_W, MH = room.mapH || C.MAP_H;
+  const alive = [...room.players.values()].filter(p => p.alive);
+  let x, y;
+  if (alive.length) {
+    const anchor = alive[Math.floor(Math.random() * alive.length)];
+    const a = Math.random() * Math.PI * 2;
+    x = Math.max(60, Math.min(MW-60, anchor.x + Math.cos(a)*900));
+    y = Math.max(60, Math.min(MH-60, anchor.y + Math.sin(a)*900));
+  } else { x = MW/2; y = 60; }
+  room.monsters.push({
+    id: room.nextMonsterId++, x, y,
+    hp: diff.hp * 30 + 40, maxHp: diff.hp * 30 + 40,
+    speed: diff.speed * 0.6, dmg: diff.dmg * 3,
+    r: C.SURV_MON_R + 22, xp: 30, elite: true, boss: true, nextHitAt: 0,
+  });
+  io.to(room.code).emit('bossSpawn', {});
+}
+
 // Outgoing damage from a shooter to a monster, including buffs & survival level.
 function outgoingDmg(room, ownerId, baseDmg) {
   const killer = room.players.get(ownerId);
@@ -766,7 +810,15 @@ function damageMonster(room, mo, dmg, ownerId) {
   if (mo.hp <= 0) {
     const idx = room.monsters.indexOf(mo);
     if (idx >= 0) room.monsters.splice(idx, 1);
-    dropGem(room, mo.x, mo.y, mo.xp);
+    if (mo.boss) {
+      // burst of gems around the boss
+      for (let g = 0; g < 8; g++) {
+        const a = (g/8)*Math.PI*2;
+        dropGem(room, mo.x + Math.cos(a)*30, mo.y + Math.sin(a)*30, 5);
+      }
+    } else {
+      dropGem(room, mo.x, mo.y, mo.xp);
+    }
     const killer = room.players.get(ownerId);
     if (killer) {
       killer.kills++;
@@ -851,7 +903,8 @@ function startRound(room) {
   }
   room.bullets = []; room.hearts = []; room.rocketPickups = []; room.sodas = [];
   room.powerups = [];
-  room.monsters = []; room.gems = [];
+  room.monsters = []; room.gems = []; room.survItems = [];
+  room.lastItemSpawn = Date.now(); room.lastBossSpawn = Date.now(); room.nextItemId = 1;
   room.turrets = []; room.pets = [];
   room.roundEndsAt = Date.now() + C.ROUND_MS;
   room.remainingMs = C.ROUND_MS;
@@ -1363,6 +1416,13 @@ function tick(room) {
       for (let i = 0; i < n; i++) spawnMonster(room, survDiff);
       room.lastMonsterSpawn = now;
     }
+    if (now - (room.lastItemSpawn||0) >= C.SURV_ITEM_EVERY) {
+      if (room.survItems.length < 3) spawnSurvItem(room);
+      room.lastItemSpawn = now;
+    }
+    if (now - (room.lastBossSpawn||0) >= C.SURV_BOSS_EVERY) {
+      spawnBoss(room, survDiff); room.lastBossSpawn = now;
+    }
   }
 
   for (const p of room.players.values()) {
@@ -1497,6 +1557,28 @@ function tick(room) {
           room.gems.splice(i, 1);
         }
       }
+      // Special pickups (chicken heal / magnet vacuum / bomb nuke)
+      for (let i = room.survItems.length-1; i >= 0; i--) {
+        const it = room.survItems[i];
+        if ((it.x-p.x)**2 + (it.y-p.y)**2 < (C.PLAYER_R+16)**2) {
+          if (it.type === 'chicken') {
+            p.hp = maxHpFor(p, now);
+            io.to(room.code).emit('heal', { id: p.id, amount: 1 });
+          } else if (it.type === 'magnet') {
+            // vacuum every gem into XP
+            for (const g of room.gems) grantXp(room, p, g.val || 1);
+            room.gems = [];
+          } else if (it.type === 'bomb') {
+            // clear the screen of zombies (credit to picker)
+            io.to(room.code).emit('explosion', { x: p.x, y: p.y, r: 260 });
+            for (let mi = room.monsters.length-1; mi >= 0; mi--) {
+              damageMonster(room, room.monsters[mi], 9999, p.id);
+            }
+          }
+          io.to(room.code).emit('survItem', { type: it.type });
+          room.survItems.splice(i, 1);
+        }
+      }
     }
   }
 
@@ -1528,16 +1610,31 @@ function tick(room) {
         if (d2 < bestD) { bestD = d2; target = pl; }
       }
       if (target) {
-        // Move toward the target, but if a wall is in the way try progressively
-        // steeper angles so monsters (including big "elite" ones) slide around
-        // corners instead of getting stuck against a wall.
-        const baseA = Math.atan2(target.y-mo.y, target.x-mo.x);
-        const offsets = [0, 0.4, -0.4, 0.85, -0.85, 1.3, -1.3];
-        for (const off of offsets) {
-          const a = baseA + off;
-          const nx = mo.x + Math.cos(a)*mo.speed;
-          const ny = mo.y + Math.sin(a)*mo.speed;
-          if (!hitsWallList(room.walls, nx, ny, mo.r)) { mo.x = nx; mo.y = ny; break; }
+        const dxm = target.x - mo.x, dym = target.y - mo.y;
+        const dm = Math.hypot(dxm, dym) || 1;
+        const sx = dxm/dm * mo.speed, sy = dym/dm * mo.speed;
+        // If the monster is currently overlapping a wall (bad spawn, knockback,
+        // tight corner), walk straight toward the target ignoring walls so it
+        // can ESCAPE instead of freezing forever. (Players already do this.)
+        if (hitsWallList(room.walls, mo.x, mo.y, mo.r)) {
+          mo.x += sx; mo.y += sy;
+        } else {
+          let moved = false;
+          // axis-separated slide (smooth wall-following)
+          if (!hitsWallList(room.walls, mo.x + sx, mo.y, mo.r)) { mo.x += sx; moved = true; }
+          if (!hitsWallList(room.walls, mo.x, mo.y + sy, mo.r)) { mo.y += sy; moved = true; }
+          // if both axes blocked, try angled detours around the corner
+          if (!moved) {
+            const baseA = Math.atan2(dym, dxm);
+            for (const off of [0.6, -0.6, 1.05, -1.05, 1.6, -1.6, 2.2, -2.2]) {
+              const a = baseA + off;
+              const nx = mo.x + Math.cos(a)*mo.speed, ny = mo.y + Math.sin(a)*mo.speed;
+              if (!hitsWallList(room.walls, nx, ny, mo.r)) { mo.x = nx; mo.y = ny; moved = true; break; }
+            }
+          }
+          // Last resort: boxed in on every side — step toward the player anyway
+          // (phases through the thin obstacle) so a zombie can NEVER freeze.
+          if (!moved) { mo.x += sx; mo.y += sy; }
         }
         const hitR = mo.r + C.PLAYER_R;
         if (bestD < hitR*hitR && now >= mo.nextHitAt) {
@@ -1822,8 +1919,9 @@ function tick(room) {
       rocketPickups: room.rocketPickups.map(r=>({x:r.x, y:r.y})),
       sodas:   room.sodas.map(s=>({x:s.x, y:s.y})),
       powerups: room.powerups.map(pu=>({x:pu.x, y:pu.y, type:pu.type})),
-      monsters: room.monsters.map(m=>({id:m.id, x:m.x, y:m.y, hp:m.hp, maxHp:m.maxHp, r:m.r, elite:m.elite})),
+      monsters: room.monsters.map(m=>({id:m.id, x:m.x, y:m.y, hp:m.hp, maxHp:m.maxHp, r:m.r, elite:m.elite, boss:m.boss})),
       gems: room.gems.map(g=>({x:g.x, y:g.y, val:g.val})),
+      survItems: room.survItems.map(it=>({x:it.x, y:it.y, type:it.type})),
       turrets: room.turrets.map(t=>({x:t.x, y:t.y, angle:t.angle||0, hp:t.hp, maxHp:C.TURRET_HP, owner:t.owner})),
       pets:    room.pets.map(pt=>({x:pt.x, y:pt.y, hp:pt.hp, maxHp:C.PET_HP, msLeft: Math.max(0, pt.expiresAt - now), owner:pt.owner})),
     });
