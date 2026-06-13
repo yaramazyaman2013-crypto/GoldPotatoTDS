@@ -106,10 +106,12 @@ const C = {
   DAMAGE_BUFF_MUL:      2,
   SHIELD_BUFF_MS:       6000,
   // Survival mode (Vampire-Survivors-like co-op vs endless monster waves)
-  SURV_SPAWN_START_MS:  1400,   // initial gap between spawn batches
-  SURV_SPAWN_MIN_MS:    260,    // fastest spawn gap
-  SURV_MAX_MONSTERS:    240,
-  SURV_MON_SPEED:       1.7,
+  SURV_MAP_W:           3600,   // survival uses a MUCH bigger arena
+  SURV_MAP_H:           2700,
+  SURV_SPAWN_START_MS:  1800,   // initial gap between spawn batches
+  SURV_SPAWN_MIN_MS:    600,    // fastest spawn gap (fewer zombies overall)
+  SURV_MAX_MONSTERS:    80,     // hard cap on living zombies
+  SURV_MON_SPEED:       1.6,
   SURV_MON_HP:          3,
   SURV_MON_DMG:         1,
   SURV_MON_CONTACT_CD:  650,    // ms between contact hits from one monster
@@ -118,6 +120,7 @@ const C = {
   SURV_GEM_MAGNET_R:    140,
   SURV_LEVEL_BASE_XP:   5,      // xp needed for level 2
   SURV_LEVEL_GROWTH:    1.35,   // xp curve multiplier per level
+  SURV_RESPAWN_MS:      60 * 1000, // dead players come back after 60s
   // Turret
   TURRET_HP: 32,
   TURRET_MOVE_SPEED: 3.2,
@@ -202,6 +205,35 @@ function buildWalls() {
   return w;
 }
 const DEFAULT_WALLS = buildWalls();
+
+// Survival arena: a big open field with scattered obstacle clusters so
+// zombies (which now collide with walls) have things to path around, but
+// there is lots of room to kite. Deterministic-ish layout via a seeded RNG.
+function buildSurvivalMap(W, H) {
+  const w = [];
+  const T = 24;
+  // outer border
+  w.push({x:0,y:0,w:W,h:T});
+  w.push({x:0,y:H-T,w:W,h:T});
+  w.push({x:0,y:0,w:T,h:H});
+  w.push({x:W-T,y:0,w:T,h:H});
+  // simple LCG seeded RNG for a stable map
+  let seed = 1337;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+  // scattered pillars / blocks across the field, kept away from the
+  // top-left spawn area (players spawn within ~1600x1200)
+  const tries = 90;
+  for (let i = 0; i < tries; i++) {
+    const bw = 40 + Math.floor(rnd() * 130);
+    const bh = 40 + Math.floor(rnd() * 130);
+    const x = 220 + Math.floor(rnd() * (W - 440 - bw));
+    const y = 220 + Math.floor(rnd() * (H - 440 - bh));
+    // leave the immediate spawn pocket clear
+    if (x < 700 && y < 600) continue;
+    w.push({x, y, w: bw, h: bh});
+  }
+  return w;
+}
 
 // ============================================================
 // IMPOSTER (Among-Us-like) MODE — constants + dedicated ship map
@@ -400,11 +432,14 @@ const VALID_MODES = ['ffa', 'survival', 'imposter'];
 function newRoom(ownerSocketId, ownerName, ownerColor, ownerCls, mapName, mode) {
   let code;
   do { code = makeCode(); } while (rooms.has(code));
+  const safeMode = VALID_MODES.includes(mode) ? mode : 'ffa';
   const room = {
     code, ownerId: ownerSocketId,
     started: false,
-    mode: VALID_MODES.includes(mode) ? mode : 'ffa',
+    mode: safeMode,
     mapName: mapName || 'default',
+    mapW: safeMode === 'survival' ? C.SURV_MAP_W : C.MAP_W,
+    mapH: safeMode === 'survival' ? C.SURV_MAP_H : C.MAP_H,
     walls: getMapWalls(mapName),
     players: new Map(),
     bullets: [], hearts: [], rocketPickups: [], sodas: [], powerups: [],
@@ -457,6 +492,10 @@ function addPlayer(room, id, name, color, cls) {
     speedUntil: 0, dmgUntil: 0, shieldUntil: 0,
     // Survival mode progression
     xp: 0, level: 1, xpToNext: C.SURV_LEVEL_BASE_XP,
+    perkQueue: [], perkShowing: false, respawnAt: 0, lastRegenAt: 0,
+    pDmg: 1, pFire: 1, pSpeed: 1, pMaxHp: 0, pRegen: 0, pMagnet: 0, pXp: 1,
+    pPierce: 0, pBulletSpeed: 1, pMulti: 0, pLifesteal: 0, pThorns: 0,
+    pCrit: 0, pCritMul: 2, pBigBullet: 0, pExplode: 0, pKnock: 0,
     // Imposter mode
     role: 'crew', tasks: [], killReadyAt: 0, emergencyUsed: 0,
     vented: false, ventGroup: null, ventId: 0,
@@ -531,14 +570,104 @@ function spawnPowerup(room) {
   }
 }
 
-// Survival: per-level stat multipliers derived from a player's level.
-function survBonus(level) {
-  const l = Math.max(1, level || 1);
-  return {
-    dmgMul:   1 + 0.15 * (l - 1),                 // +15% damage / level
-    fireMul:  Math.max(0.45, 1 - 0.045 * (l - 1)),// faster fire (down to ~2.2x)
-    speedMul: Math.min(1.5, 1 + 0.02 * (l - 1)),  // +2% move / level (cap +50%)
-  };
+// ============================================================
+// SURVIVAL PERKS (Vampire-Survivors style level-up upgrades)
+// On each level-up the player is offered 3 random perks and picks one.
+// Effects accumulate on the player and feed into combat math below.
+// ============================================================
+function resetPerks(p) {
+  p.pDmg = 1; p.pFire = 1; p.pSpeed = 1; p.pMaxHp = 0; p.pRegen = 0;
+  p.pMagnet = 0; p.pXp = 1; p.pPierce = 0; p.pBulletSpeed = 1; p.pMulti = 0;
+  p.pLifesteal = 0; p.pThorns = 0; p.pCrit = 0; p.pCritMul = 2;
+  p.pBigBullet = 0; p.pExplode = 0; p.pKnock = 0;
+}
+
+const PERKS = [
+  // ---- pure damage ----
+  { id:'dmg1', name:'Keskin Mermi', desc:'+%15 hasar', icon:'⚔️', apply:p=>p.pDmg*=1.15 },
+  { id:'dmg2', name:'Ağır Mermi', desc:'+%25 hasar', icon:'⚔️', apply:p=>p.pDmg*=1.25 },
+  { id:'dmg3', name:'Yıkıcı Güç', desc:'+%40 hasar', icon:'💥', apply:p=>p.pDmg*=1.40 },
+  // ---- fire rate ----
+  { id:'fire1', name:'Hızlı Tetik', desc:'+%12 atış hızı', icon:'🔫', apply:p=>p.pFire*=0.88 },
+  { id:'fire2', name:'Otomatik', desc:'+%20 atış hızı', icon:'🔫', apply:p=>p.pFire*=0.80 },
+  { id:'fire3', name:'Makineli', desc:'+%30 atış hızı', icon:'🔥', apply:p=>p.pFire*=0.70 },
+  // ---- movement ----
+  { id:'spd1', name:'Tabanları Yağla', desc:'+%10 hız', icon:'👟', apply:p=>p.pSpeed*=1.10 },
+  { id:'spd2', name:'Çevik', desc:'+%18 hız', icon:'👟', apply:p=>p.pSpeed*=1.18 },
+  // ---- max hp ----
+  { id:'hp1', name:'Sağlam', desc:'+5 can', icon:'❤️', apply:p=>p.pMaxHp+=5 },
+  { id:'hp2', name:'Dayanıklı', desc:'+10 can', icon:'❤️', apply:p=>p.pMaxHp+=10 },
+  { id:'hp3', name:'Et Duvarı', desc:'+20 can', icon:'🛡️', apply:p=>p.pMaxHp+=20 },
+  // ---- regen ----
+  { id:'reg1', name:'İyileşme', desc:'+1 can/sn', icon:'➕', apply:p=>p.pRegen+=1 },
+  { id:'reg2', name:'Hızlı İyileşme', desc:'+2 can/sn', icon:'➕', apply:p=>p.pRegen+=2 },
+  // ---- magnet ----
+  { id:'mag1', name:'Mıknatıs', desc:'+60 toplama menzili', icon:'🧲', apply:p=>p.pMagnet+=60 },
+  { id:'mag2', name:'Süper Mıknatıs', desc:'+120 toplama menzili', icon:'🧲', apply:p=>p.pMagnet+=120 },
+  // ---- xp ----
+  { id:'xp1', name:'Öğrenen', desc:'+%20 XP', icon:'📘', apply:p=>p.pXp*=1.20 },
+  { id:'xp2', name:'Bilge', desc:'+%35 XP', icon:'📘', apply:p=>p.pXp*=1.35 },
+  // ---- pierce ----
+  { id:'prc1', name:'Delici Mermi', desc:'+1 delme', icon:'➹', apply:p=>p.pPierce+=1 },
+  { id:'prc2', name:'Zırh Delici', desc:'+2 delme', icon:'➹', apply:p=>p.pPierce+=2 },
+  // ---- bullet speed ----
+  { id:'bsp1', name:'Namlu Hızı', desc:'+%25 mermi hızı', icon:'💨', apply:p=>p.pBulletSpeed*=1.25 },
+  { id:'bsp2', name:'Süpersonik', desc:'+%45 mermi hızı', icon:'💨', apply:p=>p.pBulletSpeed*=1.45 },
+  // ---- multishot ----
+  { id:'mlt1', name:'Çatal Atış', desc:'+1 mermi', icon:'🎯', apply:p=>p.pMulti+=1 },
+  { id:'mlt2', name:'Yelpaze', desc:'+2 mermi', icon:'🎯', apply:p=>p.pMulti+=2 },
+  // ---- lifesteal ----
+  { id:'lif1', name:'Kan Emici', desc:'%15 can çalma', icon:'🩸', apply:p=>p.pLifesteal+=0.15 },
+  { id:'lif2', name:'Vampir', desc:'%30 can çalma', icon:'🦇', apply:p=>p.pLifesteal+=0.30 },
+  // ---- thorns ----
+  { id:'thr1', name:'Dikenli Zırh', desc:'Temasta 2 hasar', icon:'🌵', apply:p=>p.pThorns+=2 },
+  { id:'thr2', name:'Kirpi', desc:'Temasta 5 hasar', icon:'🌵', apply:p=>p.pThorns+=5 },
+  // ---- crit ----
+  { id:'crt1', name:'Nişancı', desc:'%15 kritik şans', icon:'✨', apply:p=>p.pCrit=Math.min(1,p.pCrit+0.15) },
+  { id:'crt2', name:'Keskin Göz', desc:'%25 kritik şans', icon:'✨', apply:p=>p.pCrit=Math.min(1,p.pCrit+0.25) },
+  { id:'crtm', name:'Ölümcül Kritik', desc:'Kritik hasarı x3', icon:'🎲', apply:p=>p.pCritMul+=1 },
+  // ---- bullet size ----
+  { id:'big1', name:'İri Mermi', desc:'+3 mermi boyutu', icon:'⚪', apply:p=>p.pBigBullet+=3 },
+  { id:'big2', name:'Top Gülle', desc:'+6 mermi boyutu', icon:'⚪', apply:p=>p.pBigBullet+=6 },
+  // ---- explosive ----
+  { id:'exp1', name:'Patlayıcı Mermi', desc:'Küçük patlama', icon:'💣', apply:p=>p.pExplode=Math.max(p.pExplode,45) },
+  { id:'exp2', name:'Büyük Patlama', desc:'Geniş patlama', icon:'💣', apply:p=>p.pExplode=Math.max(p.pExplode,75) },
+  // ---- knockback ----
+  { id:'knk1', name:'Geri Tepme', desc:'Zombileri iter', icon:'🌀', apply:p=>p.pKnock+=14 },
+  { id:'knk2', name:'Şok Dalgası', desc:'Güçlü itme', icon:'🌀', apply:p=>p.pKnock+=28 },
+  // ---- combo / trade-off perks ----
+  { id:'glasscannon', name:'Cam Top', desc:'+%50 hasar, -10 can', icon:'🔮', apply:p=>{p.pDmg*=1.5;p.pMaxHp-=10;} },
+  { id:'berserk', name:'Çılgın', desc:'+%30 atış hızı, -8 can', icon:'😡', apply:p=>{p.pFire*=0.70;p.pMaxHp-=8;} },
+  { id:'sniperperk', name:'Tek Atış', desc:'+%60 hasar, -%20 atış hızı', icon:'🎯', apply:p=>{p.pDmg*=1.6;p.pFire*=1.20;} },
+  { id:'sprinter', name:'Koşucu', desc:'+%30 hız, +60 mıknatıs', icon:'🏃', apply:p=>{p.pSpeed*=1.30;p.pMagnet+=60;} },
+  { id:'scholar', name:'Akademisyen', desc:'+%50 XP, -%5 hasar', icon:'🎓', apply:p=>{p.pXp*=1.5;p.pDmg*=0.95;} },
+  { id:'juggernaut', name:'Tank', desc:'+30 can, diken +4', icon:'🦏', apply:p=>{p.pMaxHp+=30;p.pThorns+=4;} },
+  { id:'hailfire', name:'Sağanak', desc:'+2 mermi, -%15 hasar', icon:'🌧️', apply:p=>{p.pMulti+=2;p.pDmg*=0.85;} },
+  { id:'piercer', name:'Şiş', desc:'+2 delme, +%20 mermi hızı', icon:'➹', apply:p=>{p.pPierce+=2;p.pBulletSpeed*=1.2;} },
+  { id:'leech', name:'Sülük', desc:'%20 can çalma, +%10 hasar', icon:'🩸', apply:p=>{p.pLifesteal+=0.2;p.pDmg*=1.1;} },
+  { id:'momentum', name:'İvme', desc:'+%12 hız, +%12 hasar', icon:'⚡', apply:p=>{p.pSpeed*=1.12;p.pDmg*=1.12;} },
+  { id:'fortify', name:'Tahkim', desc:'+8 can, +1 can/sn', icon:'🧱', apply:p=>{p.pMaxHp+=8;p.pRegen+=1;} },
+  { id:'hothead', name:'Ateş Topu', desc:'Patlayıcı + %15 hasar', icon:'☄️', apply:p=>{p.pExplode=Math.max(p.pExplode,50);p.pDmg*=1.15;} },
+  { id:'magneto', name:'Manyeto', desc:'+150 mıknatıs, +%20 XP', icon:'🧲', apply:p=>{p.pMagnet+=150;p.pXp*=1.2;} },
+  { id:'overclock', name:'Hız Aşırtma', desc:'+%15 atış, +%15 mermi hızı', icon:'⚙️', apply:p=>{p.pFire*=0.85;p.pBulletSpeed*=1.15;} },
+  { id:'titan', name:'Titan', desc:'+25 can, +%15 hasar, -%8 hız', icon:'🗿', apply:p=>{p.pMaxHp+=25;p.pDmg*=1.15;p.pSpeed*=0.92;} },
+  { id:'deadeye', name:'Ölü Göz', desc:'%20 kritik, kritik x2.5', icon:'👁️', apply:p=>{p.pCrit=Math.min(1,p.pCrit+0.2);p.pCritMul+=0.5;} },
+  { id:'swarm', name:'Arı Kovanı', desc:'+3 mermi, -%30 hasar', icon:'🐝', apply:p=>{p.pMulti+=3;p.pDmg*=0.7;} },
+  { id:'glassspeed', name:'Fırtına', desc:'+%25 hız, -6 can', icon:'🌪️', apply:p=>{p.pSpeed*=1.25;p.pMaxHp-=6;} },
+  { id:'bulwark', name:'Sur', desc:'+15 can, diken +2', icon:'🛡️', apply:p=>{p.pMaxHp+=15;p.pThorns+=2;} },
+];
+
+function rollPerkChoices() {
+  const pool = PERKS.slice();
+  for (let i = pool.length-1; i > 0; i--) { const j = Math.floor(Math.random()*(i+1)); [pool[i],pool[j]]=[pool[j],pool[i]]; }
+  return pool.slice(0, 3).map(p => ({ id:p.id, name:p.name, desc:p.desc, icon:p.icon }));
+}
+
+// Effective max HP for a survival player (base + tank form + perk bonus).
+function maxHpFor(p, now) {
+  let m = (now < p.tankUntil) ? C.TANK_HP_BOOST : (p.cls === 'pyro' ? C.PYRO_HP_PER_LIFE : C.HP_PER_LIFE);
+  if (p._room && p._room.mode === 'survival') m += (p.pMaxHp || 0);
+  return Math.max(1, m);
 }
 
 // Survival: difficulty scales with minutes elapsed.
@@ -547,23 +676,39 @@ function survDifficulty(room, now) {
   return {
     mins,
     hp:    C.SURV_MON_HP + Math.floor(mins * 2),
-    speed: C.SURV_MON_SPEED + mins * 0.14,
+    speed: C.SURV_MON_SPEED + mins * 0.12,
     dmg:   C.SURV_MON_DMG + Math.floor(mins / 3),
-    interval: Math.max(C.SURV_SPAWN_MIN_MS, C.SURV_SPAWN_START_MS - mins * 110),
-    batch: 1 + Math.floor(mins / 1.5),
+    interval: Math.max(C.SURV_SPAWN_MIN_MS, C.SURV_SPAWN_START_MS - mins * 90),
+    batch: 1 + Math.floor(mins / 3),
   };
 }
 
-// Spawn one monster just inside a random map edge.
+// Spawn one monster in a ring just off-screen around a random alive player
+// (so the action stays close no matter how big the arena is). Falls back to a
+// map edge if nobody is alive.
 function spawnMonster(room, diff) {
   if (room.monsters.length >= C.SURV_MAX_MONSTERS) return;
-  const edge = Math.floor(Math.random() * 4);
+  const MW = room.mapW || C.MAP_W, MH = room.mapH || C.MAP_H;
+  const m = 40;
   let x, y;
-  const m = 24;
-  if (edge === 0)      { x = m + Math.random() * (C.MAP_W - 2*m); y = m; }
-  else if (edge === 1) { x = m + Math.random() * (C.MAP_W - 2*m); y = C.MAP_H - m; }
-  else if (edge === 2) { x = m; y = m + Math.random() * (C.MAP_H - 2*m); }
-  else                 { x = C.MAP_W - m; y = m + Math.random() * (C.MAP_H - 2*m); }
+  const alive = [...room.players.values()].filter(p => p.alive);
+  if (alive.length) {
+    const anchor = alive[Math.floor(Math.random() * alive.length)];
+    // spawn 760–1080px away (just beyond a typical viewport)
+    let tries = 8;
+    do {
+      const a = Math.random() * Math.PI * 2;
+      const dist = 760 + Math.random() * 320;
+      x = Math.max(m, Math.min(MW - m, anchor.x + Math.cos(a) * dist));
+      y = Math.max(m, Math.min(MH - m, anchor.y + Math.sin(a) * dist));
+    } while (hitsWallList(room.walls, x, y, C.SURV_MON_R) && --tries > 0);
+  } else {
+    const edge = Math.floor(Math.random() * 4);
+    if (edge === 0)      { x = m + Math.random() * (MW - 2*m); y = m; }
+    else if (edge === 1) { x = m + Math.random() * (MW - 2*m); y = MH - m; }
+    else if (edge === 2) { x = m; y = m + Math.random() * (MH - 2*m); }
+    else                 { x = MW - m; y = m + Math.random() * (MH - 2*m); }
+  }
   // Occasional tougher "elite" (bigger, more hp, more xp)
   const elite = diff.mins > 1 && Math.random() < 0.06;
   room.monsters.push({
@@ -588,7 +733,10 @@ function outgoingDmg(room, ownerId, baseDmg) {
   let dmg = baseDmg || 1;
   if (killer) {
     if (Date.now() < killer.dmgUntil) dmg *= C.DAMAGE_BUFF_MUL;
-    if (room.mode === 'survival') dmg *= survBonus(killer.level).dmgMul;
+    if (room.mode === 'survival') {
+      dmg *= (killer.pDmg || 1);
+      if (killer.pCrit && Math.random() < killer.pCrit) dmg *= (killer.pCritMul || 2);
+    }
   }
   return Math.max(1, Math.ceil(dmg));
 }
@@ -601,7 +749,19 @@ function damageMonster(room, mo, dmg, ownerId) {
     if (idx >= 0) room.monsters.splice(idx, 1);
     dropGem(room, mo.x, mo.y, mo.xp);
     const killer = room.players.get(ownerId);
-    if (killer) killer.kills++;
+    if (killer) {
+      killer.kills++;
+      // Tank class charges its rage form off zombie kills too (was only PvP).
+      if (killer.cls === 'tank' && Date.now() >= killer.tankUntil) {
+        killer.tankKills++;
+        if (killer.tankKills >= C.TANK_KILLS_REQUIRED) {
+          killer.tankKills = 0;
+          killer.tankUntil = Date.now() + C.TANK_DURATION;
+          killer.hp = Math.max(killer.hp, C.TANK_HP_BOOST);
+          io.to(room.code).emit('tankMode', { id: killer.id, until: killer.tankUntil });
+        }
+      }
+    }
     return true;
   }
   return false;
@@ -609,12 +769,18 @@ function damageMonster(room, mo, dmg, ownerId) {
 
 // Award xp and handle level-ups for a survival player.
 function grantXp(room, p, amount) {
-  p.xp += amount;
+  p.xp += Math.max(1, Math.round(amount * (p.pXp || 1)));
   while (p.xp >= p.xpToNext) {
     p.xp -= p.xpToNext;
     p.level++;
     p.xpToNext = Math.round(C.SURV_LEVEL_BASE_XP * Math.pow(C.SURV_LEVEL_GROWTH, p.level - 1));
     io.to(room.code).emit('levelUp', { id: p.id, level: p.level });
+    p.perkQueue.push(rollPerkChoices());
+  }
+  // Offer the next pending perk choice if the player isn't already choosing.
+  if (p.perkQueue.length && !p.perkShowing) {
+    p.perkShowing = true;
+    io.to(p.id).emit('levelUpChoices', { choices: p.perkQueue[0], level: p.level });
   }
 }
 
@@ -655,8 +821,15 @@ function cloneWalls(src) {
 function startRound(room) {
   if (room.mode === 'imposter') return startImposterRound(room);
   room.started = true;
-  // Fresh per-round walls so mesh hp is room-local
-  room.walls = cloneWalls(getMapWalls(room.mapName));
+  // Fresh per-round walls so mesh hp is room-local. Survival uses a big arena.
+  if (room.mode === 'survival') {
+    room.mapW = C.SURV_MAP_W; room.mapH = C.SURV_MAP_H;
+    room.walls = cloneWalls(buildSurvivalMap(room.mapW, room.mapH));
+    room.groundColor = '#3a4a2a';
+  } else {
+    room.mapW = C.MAP_W; room.mapH = C.MAP_H;
+    room.walls = cloneWalls(getMapWalls(room.mapName));
+  }
   room.bullets = []; room.hearts = []; room.rocketPickups = []; room.sodas = [];
   room.powerups = [];
   room.monsters = []; room.gems = [];
@@ -689,13 +862,16 @@ function startRound(room) {
     p.tankUntil = 0; p.tankKills = 0;
     p.speedUntil = 0; p.dmgUntil = 0; p.shieldUntil = 0;
     p.xp = 0; p.level = 1; p.xpToNext = C.SURV_LEVEL_BASE_XP;
+    resetPerks(p);
+    p.perkQueue = []; p.perkShowing = false;
+    p.respawnAt = 0; p.lastRegenAt = now;
   }
   for (let i = 0; i < 4; i++) spawnHeart(room);
   spawnRocketPickup(room);
   io.to(room.code).emit('roundStart', {
     endsAt: room.roundEndsAt,
     mode: room.mode,
-    mapW: C.MAP_W, mapH: C.MAP_H, walls: room.walls,
+    mapW: room.mapW, mapH: room.mapH, walls: room.walls,
     mapName: room.mapName,
     groundColor: room.groundColor || '#4a6a3a',
   });
@@ -723,8 +899,8 @@ function checkRoundOver(room) {
   if (room.mode === 'imposter') return; // imposter mode has its own win checks
   const alive = [...room.players.values()].filter(p=>p.alive);
   if (room.mode === 'survival') {
-    // Co-op: round only ends when everyone is down (endless otherwise).
-    if (alive.length === 0) return endRound(room);
+    // Endless co-op: dead players respawn after a delay, so the run never
+    // auto-ends — it only stops when the room empties out.
     return;
   }
   if (alive.length <= 1 && room.players.size > 1) return endRound(room);
@@ -993,13 +1169,37 @@ function impDoVent(room, p, action) {
 function tryMove(p, dx, dy, r) {
   const rr = r || C.PLAYER_R;
   const walls = p._room.walls;
+  const MW = p._room.mapW || C.MAP_W, MH = p._room.mapH || C.MAP_H;
   let nx = p.x+dx, ny = p.y+dy;
-  nx = Math.max(rr, Math.min(C.MAP_W-rr, nx));
-  ny = Math.max(rr, Math.min(C.MAP_H-rr, ny));
+  nx = Math.max(rr, Math.min(MW-rr, nx));
+  ny = Math.max(rr, Math.min(MH-rr, ny));
   // If already inside a wall (bad spawn), always allow movement so player can escape
   const stuck = hitsWallList(walls, p.x, p.y, rr);
   if (stuck || !hitsWallList(walls, nx, p.y, rr)) p.x = nx;
   if (stuck || !hitsWallList(walls, p.x, ny, rr)) p.y = ny;
+}
+
+// Fire a projectile, applying survival perks (multishot, pierce, size, speed,
+// explosive, knockback). In non-survival modes it just fires one plain bullet.
+function survFire(room, p, base) {
+  const surv = room.mode === 'survival';
+  const count = 1 + (surv ? (p.pMulti || 0) : 0);
+  const spd = base.speed * (surv ? (p.pBulletSpeed || 1) : 1);
+  const spread = 0.12;
+  for (let k = 0; k < count; k++) {
+    let a = base.angle;
+    if (count > 1) a += (k - (count - 1) / 2) * spread;
+    room.bullets.push({
+      id: room.nextBulletId++, owner: p.id, type: base.type, dmg: base.dmg, ownerCls: p.cls,
+      x: p.x + Math.cos(a) * base.m, y: p.y + Math.sin(a) * base.m,
+      vx: Math.cos(a) * spd, vy: Math.sin(a) * spd,
+      angle: a, life: base.life,
+      pierce: surv ? (p.pPierce || 0) : 0,
+      rExtra: surv ? (p.pBigBullet || 0) : 0,
+      explode: surv ? (p.pExplode || 0) : 0,
+      knock: surv ? (p.pKnock || 0) : 0,
+    });
+  }
 }
 
 function applyDamage(room, victim, dmg, killerId) {
@@ -1028,11 +1228,15 @@ function applyDamage(room, victim, dmg, killerId) {
       }
     }
     io.to(room.code).emit('kill', {killer: killer ? killer.name : (room.mode === 'survival' ? '🧟' : '?'), victim: victim.name});
-    if (victim.lives <= 0) { victim.alive = false; }
+    if (victim.lives <= 0) {
+      victim.alive = false;
+      // Survival: come back after a delay instead of being eliminated.
+      if (room.mode === 'survival') victim.respawnAt = Date.now() + C.SURV_RESPAWN_MS;
+    }
     else {
       const s = randomSpawnIn(room.walls);
       victim.x = s.x; victim.y = s.y;
-      victim.hp = victim.cls === 'pyro' ? C.PYRO_HP_PER_LIFE : C.HP_PER_LIFE;
+      victim.hp = maxHpFor(victim, Date.now());
       const nowR = Date.now();
       if (victim.turretReadyAt > nowR + C.ENGINEER_TURRET_CD) victim.turretReadyAt = nowR + C.ENGINEER_TURRET_CD;
       if (victim.petReadyAt    > nowR + C.MEDIC_PET_CD)       victim.petReadyAt    = nowR + C.MEDIC_PET_CD;
@@ -1088,10 +1292,17 @@ function tick(room) {
     }
     // Tank mode expiry
     const isTank = now < p.tankUntil;
-    const sb = room.mode === 'survival' ? survBonus(p.level) : null;
-    const fireMul = sb ? sb.fireMul : 1;
+    const surv = room.mode === 'survival';
+    const fireMul = surv ? (p.pFire || 1) : 1;
     const speedBuff = now < p.speedUntil ? C.SPEED_BUFF_MUL : 1;
-    const speedMul = speedBuff * (sb ? sb.speedMul : 1) * (isTank ? 0.7 : (p.cls === 'pyro' ? 1.2 : (p.cls === 'sniper' ? 1.5 : 1)));
+    const speedMul = speedBuff * (surv ? (p.pSpeed || 1) : 1) * (isTank ? 0.7 : (p.cls === 'pyro' ? 1.2 : (p.cls === 'sniper' ? 1.5 : 1)));
+
+    // Survival: passive HP regen perk
+    if (surv && p.pRegen && now - (p.lastRegenAt || 0) >= 1000) {
+      p.lastRegenAt = now;
+      const mh = maxHpFor(p, now);
+      if (p.hp < mh) p.hp = Math.min(mh, p.hp + p.pRegen);
+    }
     const playerR = isTank ? C.PLAYER_R + 12 : C.PLAYER_R;
 
     let dx = 0, dy = 0;
@@ -1125,35 +1336,20 @@ function tick(room) {
         p.fireCd = C.PYRO_FLAME_CD * fireMul;
         p.ammo--;
         const m = 20;
-        room.bullets.push({
-          id: room.nextBulletId++, owner: p.id, type: 'flame', dmg: C.PYRO_FLAME_DMG,
-          x: p.x+Math.cos(p.angle)*m, y: p.y+Math.sin(p.angle)*m,
-          vx: Math.cos(p.angle)*C.PYRO_FLAME_SPEED, vy: Math.sin(p.angle)*C.PYRO_FLAME_SPEED,
-          angle: p.angle, life: C.PYRO_FLAME_LIFE,
-        });
+        survFire(room, p, { type:'flame', dmg:C.PYRO_FLAME_DMG, speed:C.PYRO_FLAME_SPEED, angle:p.angle, life:C.PYRO_FLAME_LIFE, m });
         if (p.ammo === 0) { p.reloading = true; p.reloadEndsAt = now + C.PYRO_REFUEL_MS; }
       } else if (p.cls === 'sniper' && p.ammo > 0) {
         p.fireCd = C.SNIPER_FIRE_CD * fireMul;
         p.ammo--;
         const m = 20;
-        room.bullets.push({
-          id: room.nextBulletId++, owner: p.id, type: 'sniper', dmg: C.SNIPER_DMG,
-          x: p.x+Math.cos(p.angle)*m, y: p.y+Math.sin(p.angle)*m,
-          vx: Math.cos(p.angle)*C.SNIPER_BULLET_SPEED, vy: Math.sin(p.angle)*C.SNIPER_BULLET_SPEED,
-          angle: p.angle, life: C.SNIPER_BULLET_LIFE,
-        });
+        survFire(room, p, { type:'sniper', dmg:C.SNIPER_DMG, speed:C.SNIPER_BULLET_SPEED, angle:p.angle, life:C.SNIPER_BULLET_LIFE, m });
         p.reloading = true; p.reloadEndsAt = now + C.SNIPER_RELOAD_MS;
       } else if (p.ammo > 0) {
         p.fireCd = (isTank ? Math.floor(C.FIRE_COOLDOWN * 0.6) : C.FIRE_COOLDOWN) * fireMul;
         p.ammo--;
         const m = 20;
         const bulletDmg = isTank ? 2 : 1;
-        room.bullets.push({
-          id: room.nextBulletId++, owner: p.id, type: 'bullet', dmg: bulletDmg,
-          x: p.x+Math.cos(p.angle)*m, y: p.y+Math.sin(p.angle)*m,
-          vx: Math.cos(p.angle)*C.BULLET_SPEED, vy: Math.sin(p.angle)*C.BULLET_SPEED,
-          life: 45,
-        });
+        survFire(room, p, { type:'bullet', dmg:bulletDmg, speed:C.BULLET_SPEED, angle:p.angle, life:45, m });
         if (p.ammo === 0) { p.reloading = true; p.reloadEndsAt = now + C.RELOAD_MS; }
       }
     }
@@ -1174,7 +1370,7 @@ function tick(room) {
     }
     for (let i = room.sodas.length-1; i >= 0; i--) {
       const s = room.sodas[i];
-      const maxHp = (now < p.tankUntil ? C.TANK_HP_BOOST : C.HP_PER_LIFE);
+      const maxHp = maxHpFor(p, now);
       if (p.hp < maxHp) magnetTo(p, s);
       if ((s.x-p.x)**2+(s.y-p.y)**2 < (C.PLAYER_R+12)**2 && p.hp < maxHp) {
         const before = p.hp;
@@ -1196,11 +1392,12 @@ function tick(room) {
     }
     // Survival: collect XP gems (wide magnet range)
     if (room.mode === 'survival') {
+      const magR = C.SURV_GEM_MAGNET_R + (p.pMagnet || 0);
       for (let i = room.gems.length-1; i >= 0; i--) {
         const g = room.gems[i];
         const dx = p.x - g.x, dy = p.y - g.y;
         const d2 = dx*dx + dy*dy;
-        if (d2 < C.SURV_GEM_MAGNET_R * C.SURV_GEM_MAGNET_R) {
+        if (d2 < magR * magR) {
           const d = Math.sqrt(d2) || 1;
           const step = Math.min(d, 7);
           g.x += dx/d*step; g.y += dy/d*step;
@@ -1209,6 +1406,23 @@ function tick(room) {
           grantXp(room, p, g.val || 1);
           room.gems.splice(i, 1);
         }
+      }
+    }
+  }
+
+  // Survival: respawn dead players after the delay (keep level & perks).
+  if (room.mode === 'survival') {
+    for (const p of room.players.values()) {
+      if (!p.alive && p.respawnAt && now >= p.respawnAt) {
+        p.respawnAt = 0;
+        p.alive = true;
+        p.lives = C.START_LIVES;
+        p.hp = maxHpFor(p, now);
+        p.ammo = p.cls === 'pyro' ? C.PYRO_FUEL_MAX : (p.cls === 'sniper' ? 1 : C.MAG_SIZE);
+        p.reloading = false;
+        const s = randomSpawnIn(room.walls);
+        p.x = s.x; p.y = s.y;
+        io.to(room.code).emit('respawn', { id: p.id });
       }
     }
   }
@@ -1225,13 +1439,25 @@ function tick(room) {
       }
       if (target) {
         const d = Math.sqrt(bestD) || 1;
-        // ghosts ignore walls; just walk straight at the target
-        mo.x += (target.x-mo.x)/d * mo.speed;
-        mo.y += (target.y-mo.y)/d * mo.speed;
+        // Move toward target but collide with walls (axis-by-axis sliding).
+        const nx = mo.x + (target.x-mo.x)/d * mo.speed;
+        const ny = mo.y + (target.y-mo.y)/d * mo.speed;
+        let moved = false;
+        if (!hitsWallList(room.walls, nx, mo.y, mo.r)) { mo.x = nx; moved = true; }
+        if (!hitsWallList(room.walls, mo.x, ny, mo.r)) { mo.y = ny; moved = true; }
+        // If fully blocked, try sliding perpendicular so they don't clump on a wall.
+        if (!moved) {
+          const px = mo.x - (target.y-mo.y)/d * mo.speed;
+          const py = mo.y + (target.x-mo.x)/d * mo.speed;
+          if (!hitsWallList(room.walls, px, mo.y, mo.r)) mo.x = px;
+          else if (!hitsWallList(room.walls, mo.x, py, mo.r)) mo.y = py;
+        }
         const hitR = mo.r + C.PLAYER_R;
         if (bestD < hitR*hitR && now >= mo.nextHitAt) {
           mo.nextHitAt = now + C.SURV_MON_CONTACT_CD;
           applyDamage(room, target, mo.dmg, null);
+          // Thorns perk: zombies take damage when they touch you.
+          if (target.pThorns) damageMonster(room, mo, target.pThorns, target.id);
         }
       }
     }
@@ -1322,10 +1548,10 @@ function tick(room) {
     const b = room.bullets[i];
     b.x += b.vx; b.y += b.vy; b.life--;
     const isRocket = b.type === 'rocket';
-    const r = isRocket ? C.ROCKET_R : (b.type === 'sniper' ? C.SNIPER_BULLET_HIT_R : C.BULLET_R);
+    const r = (isRocket ? C.ROCKET_R : (b.type === 'sniper' ? C.SNIPER_BULLET_HIT_R : C.BULLET_R)) + (b.rExtra || 0);
     let detonated = false;
 
-    if (b.life<=0||b.x<0||b.y<0||b.x>C.MAP_W||b.y>C.MAP_H) {
+    if (b.life<=0||b.x<0||b.y<0||b.x>room.mapW||b.y>room.mapH) {
       if (isRocket) detonated = true;
       else { room.bullets.splice(i,1); continue; }
     }
@@ -1347,12 +1573,35 @@ function tick(room) {
       if (room.mode === 'survival') {
         for (const mo of room.monsters) {
           if ((mo.x-b.x)**2+(mo.y-b.y)**2 < (mo.r + r)**2) {
-            if (isRocket) { detonated = true; }
-            else {
-              damageMonster(room, mo, outgoingDmg(room, b.owner, b.dmg || 1), b.owner);
-              room.bullets.splice(i,1);
-              hitSomething = true;
+            if (isRocket) { detonated = true; break; }
+            const dealt = outgoingDmg(room, b.owner, b.dmg || 1);
+            const killed = damageMonster(room, mo, dealt, b.owner);
+            // Knockback perk
+            if (b.knock) {
+              const kd = Math.hypot(mo.x-b.x, mo.y-b.y) || 1;
+              mo.x += (mo.x-b.x)/kd * b.knock; mo.y += (mo.y-b.y)/kd * b.knock;
             }
+            // Explosive perk: splash to nearby zombies
+            if (b.explode) {
+              for (const mo2 of room.monsters) {
+                if (mo2 === mo) continue;
+                if ((mo2.x-b.x)**2+(mo2.y-b.y)**2 < b.explode*b.explode) {
+                  damageMonster(room, mo2, Math.max(1, Math.ceil(dealt*0.5)), b.owner);
+                }
+              }
+              io.to(room.code).emit('explosion', {x:b.x, y:b.y, r:b.explode});
+            }
+            // Lifesteal perk: heal a fraction of damage on kill
+            if (killed) {
+              const ow = room.players.get(b.owner);
+              if (ow && ow.alive && ow.pLifesteal) {
+                const mh = maxHpFor(ow, Date.now());
+                ow.hp = Math.min(mh, ow.hp + Math.max(1, Math.round(dealt * ow.pLifesteal)));
+              }
+            }
+            // Pierce perk: keep the bullet alive through monsters
+            if (b.pierce > 0) { b.pierce--; }
+            else { room.bullets.splice(i,1); hitSomething = true; }
             break;
           }
         }
@@ -1446,7 +1695,7 @@ function tick(room) {
       players: [...room.players.values()].map(p => ({
         id:p.id, name:p.name, color:p.color, cls:p.cls, hat:p.hat, hatCfg:p.hatCfg,
         x:p.x, y:p.y, angle:p.angle,
-        hp:p.hp, lives:p.lives, maxHp: (now < p.tankUntil ? C.TANK_HP_BOOST : (p.cls==='pyro' ? C.PYRO_HP_PER_LIFE : C.HP_PER_LIFE)),
+        hp:p.hp, lives:p.lives, maxHp: maxHpFor(p, now),
         ammo:p.ammo, maxAmmo: p.cls === 'pyro' ? C.PYRO_FUEL_MAX : (p.cls === 'sniper' ? 1 : C.MAG_SIZE),
         reloading:p.reloading, reloadEndsAt:p.reloadEndsAt,
         rockets:p.rockets,
@@ -1462,6 +1711,7 @@ function tick(room) {
         dmgMs:    Math.max(0, p.dmgUntil    - now),
         shieldMs: Math.max(0, p.shieldUntil - now),
         xp:p.xp, level:p.level, xpToNext:p.xpToNext,
+        respawnIn: (room.mode === 'survival' && !p.alive && p.respawnAt) ? Math.max(0, p.respawnAt - now) : 0,
         alive:p.alive, kills:p.kills,
       })),
       bullets: room.bullets.map(b=>({id:b.id, x:b.x, y:b.y, type:b.type||'bullet', angle:b.angle})),
@@ -1565,6 +1815,30 @@ io.on('connection', (socket) => {
       ammo: C.TURRET_MAG_SIZE, reloadEndsAt: 0,
     });
     p.turretReadyAt = Date.now() + C.ENGINEER_TURRET_CD;
+  });
+
+  // Survival: player picks one of the offered level-up perks.
+  socket.on('pickPerk', ({ id }) => {
+    const code = socketRoom.get(socket.id);
+    const room = code && rooms.get(code);
+    if (!room || room.mode !== 'survival') return;
+    const p = room.players.get(socket.id);
+    if (!p || !p.perkQueue || !p.perkQueue.length) return;
+    const cur = p.perkQueue[0];
+    if (!cur.some(c => c.id === id)) return;
+    const perk = PERKS.find(x => x.id === id);
+    if (perk) {
+      perk.apply(p);
+      // Keep current-life HP within new max (perks can lower max HP).
+      const mh = maxHpFor(p, Date.now());
+      if (p.hp > mh) p.hp = mh;
+    }
+    p.perkQueue.shift();
+    p.perkShowing = false;
+    if (p.perkQueue.length) {
+      p.perkShowing = true;
+      io.to(p.id).emit('levelUpChoices', { choices: p.perkQueue[0], level: p.level });
+    }
   });
 
   // Engineer commands their own turret to walk toward a point. The turret
