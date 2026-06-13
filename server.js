@@ -500,6 +500,8 @@ function addPlayer(room, id, name, color, cls) {
     pDmg: 1, pFire: 1, pSpeed: 1, pMaxHp: 0, pRegen: 0, pMagnet: 0, pXp: 1,
     pPierce: 0, pBulletSpeed: 1, pMulti: 0, pLifesteal: 0, pThorns: 0,
     pCrit: 0, pCritMul: 2, pBigBullet: 0, pExplode: 0, pKnock: 0,
+    wAura: 0, wOrbit: 0, wLightning: 0, wMissile: 0,
+    auraAt: 0, lightningAt: 0, missileAt: 0, orbitAngle: 0, auraR: 0, orbs: null,
     // Imposter mode
     role: 'crew', tasks: [], killReadyAt: 0, emergencyUsed: 0,
     vented: false, ventGroup: null, ventId: 0,
@@ -584,6 +586,10 @@ function resetPerks(p) {
   p.pMagnet = 0; p.pXp = 1; p.pPierce = 0; p.pBulletSpeed = 1; p.pMulti = 0;
   p.pLifesteal = 0; p.pThorns = 0; p.pCrit = 0; p.pCritMul = 2;
   p.pBigBullet = 0; p.pExplode = 0; p.pKnock = 0;
+  // Vampire-Survivors auto-weapons (level 0 = not owned)
+  p.wAura = 0; p.wOrbit = 0; p.wLightning = 0; p.wMissile = 0;
+  p.auraAt = 0; p.lightningAt = 0; p.missileAt = 0; p.orbitAngle = 0;
+  p.auraR = 0; p.orbs = null;
 }
 
 const PERKS = [
@@ -659,6 +665,15 @@ const PERKS = [
   { id:'swarm', name:'Arı Kovanı', desc:'+3 mermi, -%30 hasar', icon:'🐝', apply:p=>{p.pMulti+=3;p.pDmg*=0.7;} },
   { id:'glassspeed', name:'Fırtına', desc:'+%25 hız, -6 can', icon:'🌪️', apply:p=>{p.pSpeed*=1.25;p.pMaxHp-=6;} },
   { id:'bulwark', name:'Sur', desc:'+15 can, diken +2', icon:'🛡️', apply:p=>{p.pMaxHp+=15;p.pThorns+=2;} },
+  // ---- Vampire-Survivors otomatik silahlar (seviye atladıkça güçlenir) ----
+  { id:'aura1', name:'Sarımsak', desc:'Çevrene sürekli hasar', icon:'🧄', apply:p=>p.wAura+=1 },
+  { id:'aura2', name:'Sarımsak+', desc:'Aura daha güçlü & geniş', icon:'🧄', apply:p=>p.wAura+=1 },
+  { id:'orbit1', name:'Kutsal Kitap', desc:'Etrafında dönen küre', icon:'📖', apply:p=>p.wOrbit+=1 },
+  { id:'orbit2', name:'Kutsal Kitap+', desc:'+1 dönen küre', icon:'📖', apply:p=>p.wOrbit+=1 },
+  { id:'light1', name:'Yıldırım', desc:'Düşmana otomatik yıldırım', icon:'⚡', apply:p=>p.wLightning+=1 },
+  { id:'light2', name:'Yıldırım+', desc:'Daha sık, sıçrayan yıldırım', icon:'⚡', apply:p=>p.wLightning+=1 },
+  { id:'miss1', name:'Güdümlü Füze', desc:'Otomatik hedef bulan füze', icon:'🚀', apply:p=>p.wMissile+=1 },
+  { id:'miss2', name:'Füze Salvosu', desc:'Daha sık güdümlü füze', icon:'🚀', apply:p=>p.wMissile+=1 },
 ];
 
 function rollPerkChoices() {
@@ -1206,6 +1221,75 @@ function survFire(room, p, base) {
   }
 }
 
+// Vampire-Survivors auto-weapons that fire on their own each tick.
+function survWeapons(room, p, now) {
+  const dmgMul = p.pDmg || 1;
+  const ms = room.monsters;
+  // Garlic aura: damages everything in a growing radius on an interval.
+  if (p.wAura > 0) {
+    p.auraR = 70 + p.wAura * 28;
+    if (now - (p.auraAt || 0) >= 600) {
+      p.auraAt = now;
+      const dmg = Math.ceil((1 + p.wAura) * dmgMul);
+      for (let mi = ms.length-1; mi >= 0; mi--) {
+        const mo = ms[mi];
+        if ((mo.x-p.x)**2 + (mo.y-p.y)**2 < p.auraR*p.auraR) damageMonster(room, mo, dmg, p.id);
+      }
+    }
+  } else p.auraR = 0;
+  // Orbiting orbs (King Bible): rotate around the player, hit on contact.
+  if (p.wOrbit > 0) {
+    p.orbitAngle = (p.orbitAngle || 0) + 0.07;
+    const count = p.wOrbit + 1;
+    const R = 66;
+    const orbDmg = Math.ceil((2 + p.wOrbit) * dmgMul);
+    p.orbs = [];
+    for (let k = 0; k < count; k++) {
+      const a = p.orbitAngle + k * (Math.PI*2/count);
+      const ox = p.x + Math.cos(a)*R, oy = p.y + Math.sin(a)*R;
+      p.orbs.push([Math.round(ox), Math.round(oy)]);
+      for (const mo of ms) {
+        if ((mo.x-ox)**2 + (mo.y-oy)**2 < (mo.r+15)**2 && now >= (mo.orbAt || 0)) {
+          mo.orbAt = now + 350; damageMonster(room, mo, orbDmg, p.id);
+        }
+      }
+    }
+  } else p.orbs = null;
+  // Chain lightning: zap nearest enemy, chaining to a few more.
+  if (p.wLightning > 0 && now - (p.lightningAt || 0) >= Math.max(700, 2200 - p.wLightning*250)) {
+    let tgt = null, bd = 460*460;
+    for (const mo of ms) { const d=(mo.x-p.x)**2+(mo.y-p.y)**2; if (d<bd){bd=d;tgt=mo;} }
+    if (tgt) {
+      p.lightningAt = now;
+      const dmg = Math.ceil((6 + p.wLightning*4) * dmgMul);
+      const seen = new Set([tgt]); const hits = [[Math.round(tgt.x),Math.round(tgt.y)]];
+      damageMonster(room, tgt, dmg, p.id);
+      let last = tgt;
+      for (let c = 0; c < p.wLightning; c++) {
+        let nx = null, nd = 200*200;
+        for (const mo of ms) { if (seen.has(mo)) continue; const d=(mo.x-last.x)**2+(mo.y-last.y)**2; if (d<nd){nd=d;nx=mo;} }
+        if (!nx) break;
+        seen.add(nx); damageMonster(room, nx, dmg, p.id); hits.push([Math.round(nx.x),Math.round(nx.y)]); last = nx;
+      }
+      io.to(room.code).emit('zap', { from:[Math.round(p.x),Math.round(p.y)], hits });
+    }
+  }
+  // Homing missiles: launch a seeking projectile at the nearest enemy.
+  if (p.wMissile > 0 && now - (p.missileAt || 0) >= Math.max(450, 1700 - p.wMissile*220)) {
+    let tgt = null, bd = 760*760;
+    for (const mo of ms) { const d=(mo.x-p.x)**2+(mo.y-p.y)**2; if (d<bd){bd=d;tgt=mo;} }
+    if (tgt) {
+      p.missileAt = now;
+      const a = Math.atan2(tgt.y-p.y, tgt.x-p.x);
+      room.bullets.push({
+        id: room.nextBulletId++, owner: p.id, type: 'missile', dmg: 4 + p.wMissile*3, ownerCls: p.cls,
+        x: p.x, y: p.y, vx: Math.cos(a)*9, vy: Math.sin(a)*9, angle: a, life: 120,
+        homing: true, explode: 55, pierce: 0, rExtra: 2, knock: 6,
+      });
+    }
+  }
+}
+
 function applyDamage(room, victim, dmg, killerId) {
   const nowD = Date.now();
   // Shield power-up: fully absorbs incoming damage while active.
@@ -1307,6 +1391,8 @@ function tick(room) {
       const mh = maxHpFor(p, now);
       if (p.hp < mh) p.hp = Math.min(mh, p.hp + p.pRegen);
     }
+    // Survival: Vampire-Survivors auto-weapons
+    if (surv) survWeapons(room, p, now);
     const playerR = isTank ? C.PLAYER_R + 12 : C.PLAYER_R;
 
     let dx = 0, dy = 0;
@@ -1442,19 +1528,16 @@ function tick(room) {
         if (d2 < bestD) { bestD = d2; target = pl; }
       }
       if (target) {
-        const d = Math.sqrt(bestD) || 1;
-        // Move toward target but collide with walls (axis-by-axis sliding).
-        const nx = mo.x + (target.x-mo.x)/d * mo.speed;
-        const ny = mo.y + (target.y-mo.y)/d * mo.speed;
-        let moved = false;
-        if (!hitsWallList(room.walls, nx, mo.y, mo.r)) { mo.x = nx; moved = true; }
-        if (!hitsWallList(room.walls, mo.x, ny, mo.r)) { mo.y = ny; moved = true; }
-        // If fully blocked, try sliding perpendicular so they don't clump on a wall.
-        if (!moved) {
-          const px = mo.x - (target.y-mo.y)/d * mo.speed;
-          const py = mo.y + (target.x-mo.x)/d * mo.speed;
-          if (!hitsWallList(room.walls, px, mo.y, mo.r)) mo.x = px;
-          else if (!hitsWallList(room.walls, mo.x, py, mo.r)) mo.y = py;
+        // Move toward the target, but if a wall is in the way try progressively
+        // steeper angles so monsters (including big "elite" ones) slide around
+        // corners instead of getting stuck against a wall.
+        const baseA = Math.atan2(target.y-mo.y, target.x-mo.x);
+        const offsets = [0, 0.4, -0.4, 0.85, -0.85, 1.3, -1.3];
+        for (const off of offsets) {
+          const a = baseA + off;
+          const nx = mo.x + Math.cos(a)*mo.speed;
+          const ny = mo.y + Math.sin(a)*mo.speed;
+          if (!hitsWallList(room.walls, nx, ny, mo.r)) { mo.x = nx; mo.y = ny; break; }
         }
         const hitR = mo.r + C.PLAYER_R;
         if (bestD < hitR*hitR && now >= mo.nextHitAt) {
@@ -1550,6 +1633,21 @@ function tick(room) {
 
   for (let i = room.bullets.length-1; i >= 0; i--) {
     const b = room.bullets[i];
+    // Homing missiles steer toward the nearest zombie.
+    if (b.homing && room.mode === 'survival') {
+      let tgt = null, bd = 1e9;
+      for (const mo of room.monsters) { const d=(mo.x-b.x)**2+(mo.y-b.y)**2; if (d<bd){bd=d;tgt=mo;} }
+      if (tgt) {
+        const desired = Math.atan2(tgt.y-b.y, tgt.x-b.x);
+        let cur = Math.atan2(b.vy, b.vx);
+        let diff = desired - cur;
+        while (diff > Math.PI) diff -= Math.PI*2;
+        while (diff < -Math.PI) diff += Math.PI*2;
+        cur += Math.max(-0.2, Math.min(0.2, diff));
+        const sp = Math.hypot(b.vx, b.vy);
+        b.vx = Math.cos(cur)*sp; b.vy = Math.sin(cur)*sp; b.angle = cur;
+      }
+    }
     b.x += b.vx; b.y += b.vy; b.life--;
     const isRocket = b.type === 'rocket';
     const r = (isRocket ? C.ROCKET_R : (b.type === 'sniper' ? C.SNIPER_BULLET_HIT_R : C.BULLET_R)) + (b.rExtra || 0);
@@ -1716,6 +1814,7 @@ function tick(room) {
         shieldMs: Math.max(0, p.shieldUntil - now),
         xp:p.xp, level:p.level, xpToNext:p.xpToNext,
         respawnIn: (room.mode === 'survival' && !p.alive && p.respawnAt) ? Math.max(0, p.respawnAt - now) : 0,
+        auraR: p.auraR || 0, orbs: p.orbs || null,
         alive:p.alive, kills:p.kills,
       })),
       bullets: room.bullets.map(b=>({id:b.id, x:b.x, y:b.y, type:b.type||'bullet', angle:b.angle})),

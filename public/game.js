@@ -1352,6 +1352,29 @@ socket.on('respawn', ({ id }) => {
   if (id === socket.id) $('dead').classList.add('hidden');
 });
 
+// Survival: chain-lightning visual effect.
+const zaps = [];
+socket.on('zap', ({ from, hits }) => {
+  zaps.push({ from, hits, t: Date.now() });
+  if (zaps.length > 40) zaps.shift();
+});
+function drawZaps() {
+  const now = Date.now();
+  for (let i = zaps.length-1; i >= 0; i--) {
+    const z = zaps[i]; const age = now - z.t;
+    if (age > 220) { zaps.splice(i, 1); continue; }
+    const a = 1 - age/220;
+    const path = () => {
+      gctx.beginPath();
+      gctx.moveTo(z.from[0]-camX, z.from[1]-camY);
+      for (const h of z.hits) gctx.lineTo(h[0]-camX, h[1]-camY);
+      gctx.stroke();
+    };
+    gctx.strokeStyle = `rgba(120,200,255,${a})`; gctx.lineWidth = 4; path();
+    gctx.strokeStyle = `rgba(255,255,255,${a})`; gctx.lineWidth = 1.3; path();
+  }
+}
+
 socket.on('roundEnd', ({ board, winner, mode, survivalMs, winnerSide, roles }) => {
   state.inGame = false;
   $('perkModal').classList.add('hidden');
@@ -2115,12 +2138,24 @@ function render() {
       gctx.fillStyle = '#fff';
       gctx.fillRect(-4, -1, 8, 2);
       gctx.restore();
+    } else if (b.type === 'missile') {
+      const ang = b.angle || 0;
+      gctx.save(); gctx.translate(x, y); gctx.rotate(ang);
+      // flame trail
+      gctx.fillStyle = 'rgba(255,150,40,0.7)';
+      gctx.beginPath(); gctx.arc(-8, 0, 4, 0, Math.PI*2); gctx.fill();
+      // body
+      gctx.fillStyle = '#d8d8e0'; gctx.fillRect(-5, -3, 10, 6);
+      gctx.fillStyle = '#ff4654'; gctx.beginPath();
+      gctx.moveTo(5, -3); gctx.lineTo(10, 0); gctx.lineTo(5, 3); gctx.fill();
+      gctx.restore();
     } else {
       gctx.fillStyle='#000'; gctx.fillRect(x-3,y-3,6,6);
       gctx.fillStyle='#ffd24a'; gctx.fillRect(x-2,y-2,4,4);
     }
   }
   drawExplosions();
+  drawZaps();
   drawKnifeFx();
 
   // pets (heal totems)
@@ -2215,6 +2250,24 @@ function render() {
       gctx.strokeStyle = `rgba(52,214,255,${0.4+0.3*tankPulse})`;
       gctx.lineWidth = 2;
       gctx.beginPath(); gctx.arc(px, py, 20, 0, Math.PI*2); gctx.stroke();
+    }
+    // Survival garlic aura
+    if (p.auraR > 0) {
+      const ap = 0.10 + 0.05 * Math.sin(Date.now()/200);
+      gctx.fillStyle = `rgba(150,255,120,${ap})`;
+      gctx.beginPath(); gctx.arc(px, py, p.auraR, 0, Math.PI*2); gctx.fill();
+      gctx.strokeStyle = 'rgba(150,255,120,0.35)'; gctx.lineWidth = 2;
+      gctx.beginPath(); gctx.arc(px, py, p.auraR, 0, Math.PI*2); gctx.stroke();
+    }
+    // Survival orbiting orbs (King Bible)
+    if (p.orbs) {
+      for (const o of p.orbs) {
+        const ox = o[0]-camX, oy = o[1]-camY;
+        gctx.fillStyle = 'rgba(180,140,255,0.95)';
+        gctx.beginPath(); gctx.arc(ox, oy, 8, 0, Math.PI*2); gctx.fill();
+        gctx.fillStyle = '#fff';
+        gctx.beginPath(); gctx.arc(ox, oy, 3, 0, Math.PI*2); gctx.fill();
+      }
     }
     if (p.tank) {
       gctx.save();
