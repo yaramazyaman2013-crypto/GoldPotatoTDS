@@ -1352,6 +1352,27 @@ socket.on('respawn', ({ id }) => {
   if (id === socket.id) $('dead').classList.add('hidden');
 });
 
+// Survival: special pickup collected.
+socket.on('survItem', ({ type }) => {
+  if (AUD.ctx && !AUD.muted) {
+    const t = AUD.ctx.currentTime + 0.01;
+    const notes = type === 'bomb' ? [48, 43, 36] : [72, 79, 84];
+    notes.forEach((n, i) => AUD.playNote(n, t + i*0.06, 0.2, 'square', AUD.sfxGain, 0.3));
+  }
+  const label = type === 'chicken' ? '🍗 CAN DOLDU' : (type === 'magnet' ? '🧲 XP TOPLANDI' : '💣 EKRAN TEMIZLENDI');
+  state.killfeed.unshift({ note: label, t: Date.now() });
+  if (state.killfeed.length > 6) state.killfeed.pop();
+});
+// Survival: boss appeared.
+socket.on('bossSpawn', () => {
+  if (AUD.ctx && !AUD.muted) {
+    const t = AUD.ctx.currentTime + 0.01;
+    [36, 36, 39].forEach((n, i) => AUD.playNote(n, t + i*0.12, 0.4, 'sawtooth', AUD.sfxGain, 0.3));
+  }
+  state.killfeed.unshift({ note: '👑 BOSS GELDI!', t: Date.now() });
+  if (state.killfeed.length > 6) state.killfeed.pop();
+});
+
 // Survival: chain-lightning visual effect.
 const zaps = [];
 socket.on('zap', ({ from, hits }) => {
@@ -1698,6 +1719,38 @@ function drawGem(ctx, x, y) {
   ctx.restore();
 }
 
+// Survival special pickup (chicken heal / magnet vacuum / bomb nuke)
+function drawSurvItem(ctx, x, y, type) {
+  const bob = Math.sin(Date.now()/300) * 2;
+  const pulse = 0.5 + 0.5*Math.sin(Date.now()/180);
+  const cy = y + bob;
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath(); ctx.ellipse(x, y+12, 12, 4, 0, 0, Math.PI*2); ctx.fill();
+  const col = type === 'chicken' ? '#ffcf6a' : (type === 'magnet' ? '#ff5566' : '#ffae20');
+  ctx.globalAlpha = 0.25 + pulse*0.25; ctx.fillStyle = col;
+  ctx.beginPath(); ctx.arc(x, cy, 16 + pulse*3, 0, Math.PI*2); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#11131c'; ctx.beginPath(); ctx.arc(x, cy, 13, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x, cy, 11, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#10141c'; ctx.lineWidth = 2.4; ctx.strokeStyle = '#10141c'; ctx.lineCap = 'round';
+  if (type === 'chicken') {
+    // drumstick: bone + meat
+    ctx.beginPath(); ctx.arc(x-2, cy-1, 5, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(x+1, cy+1); ctx.lineTo(x+6, cy+6); ctx.stroke();
+  } else if (type === 'magnet') {
+    // horseshoe magnet
+    ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x, cy-1, 5, Math.PI, 0); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x-5, cy-1); ctx.lineTo(x-5, cy+5); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x+5, cy-1); ctx.lineTo(x+5, cy+5); ctx.stroke();
+  } else {
+    // bomb: circle + fuse
+    ctx.beginPath(); ctx.arc(x, cy+1, 5, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(x+3, cy-3); ctx.lineTo(x+6, cy-6); ctx.stroke();
+  }
+  ctx.restore();
+}
+
 // Survival monster: a chunky pixel zombie/ghost that pulses as it moves
 function drawMonster(ctx, x, y, m) {
   const t = Date.now() * 0.006;
@@ -1708,15 +1761,28 @@ function drawMonster(ctx, x, y, m) {
   // shadow
   ctx.fillStyle = 'rgba(0,0,0,0.3)';
   ctx.beginPath(); ctx.ellipse(0, r - 1 - wob, r*0.8, 3, 0, 0, Math.PI*2); ctx.fill();
-  // body
-  const body = m.elite ? '#b02030' : '#5a7d3a';
-  const dark = m.elite ? '#6a1018' : '#37501f';
+  // body (boss = purple, elite = red, normal = green)
+  const body = m.boss ? '#8a2be2' : (m.elite ? '#b02030' : '#5a7d3a');
+  const dark = m.boss ? '#4b1480' : (m.elite ? '#6a1018' : '#37501f');
+  if (m.boss) {
+    const gp = 0.4 + 0.3*Math.sin(Date.now()/180);
+    ctx.fillStyle = `rgba(180,80,255,${gp*0.4})`;
+    ctx.beginPath(); ctx.arc(0, 0, r+10, 0, Math.PI*2); ctx.fill();
+  }
   ctx.fillStyle = dark;
   ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI*2); ctx.fill();
   ctx.fillStyle = body;
   ctx.beginPath(); ctx.arc(0, -1, r - 2, 0, Math.PI*2); ctx.fill();
+  if (m.boss) {
+    // little crown
+    ctx.fillStyle = '#ffd24a';
+    ctx.beginPath();
+    ctx.moveTo(-r*0.6, -r*0.6); ctx.lineTo(-r*0.6, -r); ctx.lineTo(-r*0.2, -r*0.7);
+    ctx.lineTo(0, -r*1.05); ctx.lineTo(r*0.2, -r*0.7); ctx.lineTo(r*0.6, -r);
+    ctx.lineTo(r*0.6, -r*0.6); ctx.closePath(); ctx.fill();
+  }
   // eyes
-  ctx.fillStyle = m.elite ? '#ffd24a' : '#ff3030';
+  ctx.fillStyle = (m.elite || m.boss) ? '#ffd24a' : '#ff3030';
   const ew = Math.max(2, r*0.22);
   ctx.fillRect(-r*0.4, -r*0.25, ew, ew);
   ctx.fillRect(r*0.4 - ew, -r*0.25, ew, ew);
@@ -2071,6 +2137,13 @@ function render() {
       const gx = g.x-camX, gy = g.y-camY;
       if (gx < -10 || gy < -10 || gx > W+10 || gy > H+10) continue;
       drawGem(gctx, gx, gy);
+    }
+  }
+  if (ss.survItems) {
+    for (const it of ss.survItems) {
+      const ix = it.x-camX, iy = it.y-camY;
+      if (ix < -20 || iy < -20 || ix > W+20 || iy > H+20) continue;
+      drawSurvItem(gctx, ix, iy, it.type);
     }
   }
   if (ss.monsters) {
