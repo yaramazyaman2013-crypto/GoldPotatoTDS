@@ -42,6 +42,7 @@
       <div id="modeList" class="map-list">
         <button class="pixel-btn small mode-btn selected" data-mode="ffa">HERKESE KARSI</button>
         <button class="pixel-btn small mode-btn" data-mode="survival">HAYATTA KALMA</button>
+        <button class="pixel-btn small mode-btn" data-mode="imposter">KATIL (AMONG)</button>
       </div>
     </div>
     <div id="modeHint" class="hint">Son kalan kazanir. Oyuncular birbirine ates eder.</div>
@@ -138,6 +139,56 @@
     </div>
   </div>
   <div id="dead" class="dead hidden" data-i18n="eliminated">ELENDIN</div>
+
+  <!-- IMPOSTER MODE UI -->
+  <div id="impHud" class="hidden">
+    <div id="impTaskBar"><div id="impTaskFill"></div><span id="impTaskTxt">Gorevler 0/0</span></div>
+    <div id="impButtons">
+      <button id="impUseBtn" class="imp-btn">KULLAN (E)</button>
+      <button id="impReportBtn" class="imp-btn">RAPOR (R)</button>
+      <button id="impKillBtn" class="imp-btn kill hidden">OLDUR (Q)</button>
+      <button id="impSaboBtn" class="imp-btn sabo hidden">SABOTAJ</button>
+      <button id="impVentBtn" class="imp-btn vent hidden">VENT (F)</button>
+    </div>
+    <div id="impGhost" class="hidden">HAYALETSIN 👻 — gorevlerini bitirebilirsin</div>
+  </div>
+
+  <div id="roleReveal" class="screen hidden overlay">
+    <div class="panel" id="rolePanel">
+      <h1 id="roleTitle"></h1>
+      <div id="roleDesc" class="hint"></div>
+      <div id="roleMates" class="hint"></div>
+    </div>
+  </div>
+
+  <div id="saboMenu" class="screen hidden overlay">
+    <div class="panel">
+      <h2 class="title-sm">SABOTAJ</h2>
+      <button id="saboLights" class="pixel-btn">ISIKLARI KAPAT</button>
+      <button id="saboReactor" class="pixel-btn">REAKTOR ERIMESI</button>
+      <button id="saboCancel" class="pixel-btn small">VAZGEC</button>
+    </div>
+  </div>
+
+  <div id="taskModal" class="screen hidden overlay">
+    <div class="panel">
+      <h2 class="title-sm">GOREV: KABLOLARI BAGLA</h2>
+      <div class="hint">Ayni renk noktalari birlestir.</div>
+      <canvas id="wireCanvas" width="420" height="300"></canvas>
+      <button id="taskClose" class="pixel-btn small">KAPAT</button>
+    </div>
+  </div>
+
+  <div id="meetingModal" class="screen hidden overlay">
+    <div class="panel meeting-panel">
+      <h2 class="title-sm" id="meetingTitle">ACIL TOPLANTI</h2>
+      <div id="meetingTimer" class="hint"></div>
+      <div id="meetingResult2" class="hint"></div>
+      <div id="voteList" class="vote-list"></div>
+      <button id="voteSkip" class="pixel-btn small">ATLA (SKIP)</button>
+    </div>
+  </div>
+
   <div id="pauseMenu" class="screen hidden overlay">
     <div class="panel">
       <h2 class="title-sm" data-i18n="settingsTitle">AYARLAR</h2>
@@ -156,7 +207,7 @@
   </div>
 </div>
 
-<audio id="bgMusic" src="music.mp3" loop preload="auto" style="display:none"></audio>
+<audio id="bgMusic" src="serenissima.mp3" loop preload="auto" style="display:none"></audio>
 <script src="supabase-config.js"></script>
 <script src="/socket.io/socket.io.js"></script>
 <script src="game.js?v=v43"></script>

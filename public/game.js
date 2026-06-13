@@ -244,6 +244,7 @@ const state = {
   inLobby: false, inGame: false,
   walls: [], mapW: 1600, mapH: 1200,
   endsAt: 0, serverState: null, killfeed: [],
+  imp: null,
 };
 
 const CLASS_INFO = {
@@ -787,6 +788,7 @@ function setConnecting(v) {
 const MODE_HINTS = {
   ffa: 'Son kalan kazanir. Oyuncular birbirine ates eder.',
   survival: 'Co-op: sonsuz canavar dalgalarina karsi birlikte hayatta kal. Canavar oldur, XP topla, seviye atla.',
+  imposter: 'Gizli katil(ler) vs masumlar. Masumlar gorev yapar, katil gizlice oldurur. Ceset bul -> rapor -> oylama. (4+ oyuncu onerilir)',
 };
 document.querySelectorAll('.mode-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -871,7 +873,8 @@ function renderLobby(room) {
   $('waitMsg').classList.toggle('hidden', isHost);
   const mapEl = $('lobbyMap');
   if (mapEl) {
-    const modeLabel = room.mode === 'survival' ? 'HAYATTA KALMA 🧟' : 'HERKESE KARSI';
+    const modeLabel = room.mode === 'survival' ? 'HAYATTA KALMA 🧟'
+                    : room.mode === 'imposter' ? 'KATIL (AMONG) 🔪' : 'HERKESE KARSI';
     mapEl.textContent = 'Mod: ' + modeLabel + '  •  Harita: ' + (room.mapName || 'default');
   }
 }
@@ -963,6 +966,20 @@ let mouseX = 0, mouseY = 0, leftDown = false, rightDown = false, middleDown = fa
 window.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   if (k in keys) keys[k] = true;
+  if (state.inGame && state.mode === 'imposter') {
+    // ignore movement/actions while a modal (meeting/task/role) is open
+    const modalOpen = !$('meetingModal').classList.contains('hidden') ||
+                      !$('taskModal').classList.contains('hidden') ||
+                      !$('roleReveal').classList.contains('hidden');
+    if (e.key === 'Escape') { togglePause(); e.preventDefault(); return; }
+    if (modalOpen) return;
+    if (k === 'e') impUse();
+    else if (k === 'q') socket.emit('impKill');
+    else if (k === 'r') socket.emit('impReport');
+    else if (k === 'f') impVentToggle();
+    else if (k === 'g') impToggleSaboMenu();
+    return;
+  }
   if (k === 'r' && state.inGame) {
     const me = state.serverState && state.serverState.players.find(p => p.id === socket.id);
     if (me && me.alive && !me.reloading && me.ammo < (me.maxAmmo || 30)) {
@@ -1082,6 +1099,15 @@ $('btnLeaveGame').addEventListener('click', () => {
 // Input loop: ~50 Hz for responsive controls
 setInterval(() => {
   if (!state.inGame) return;
+  // Imposter mode: freeze movement while a modal (meeting/task/role) is open
+  if (state.mode === 'imposter') {
+    const modalOpen = !$('meetingModal').classList.contains('hidden') ||
+                      !$('taskModal').classList.contains('hidden') ||
+                      !$('roleReveal').classList.contains('hidden') ||
+                      !$('pauseMenu').classList.contains('hidden');
+    socket.emit('input', { keys: modalOpen ? {w:false,a:false,s:false,d:false} : keys, angle: 0 });
+    return;
+  }
   socket.emit('input', { keys, angle: computeAngle(), leftDown, rightDown });
   if (middleDown && state.serverState) {
     const me = state.serverState.players.find(p => p.id === socket.id);
@@ -1114,6 +1140,16 @@ socket.on('roundStart', (data) => {
   lastAmmo = null; wasReloading = false;
   $('dead').classList.add('hidden');
   $('roundEnd').classList.add('hidden');
+  // Imposter mode: store map metadata, toggle its HUD, hide FFA HUD bits
+  const isImp = state.mode === 'imposter';
+  $('hud').classList.toggle('hidden', isImp);
+  $('impHud').classList.toggle('hidden', !isImp);
+  if (isImp) {
+    state.imp = { map: data.imp || {}, role: null, tasks: [], teammates: [], st: null };
+    impCloseAllModals();
+  } else {
+    state.imp = null;
+  }
   rebuildGroundCache();
   show('game');
 });
@@ -1283,10 +1319,22 @@ socket.on('levelUp', ({ id, level }) => {
   if (state.killfeed.length > 6) state.killfeed.pop();
 });
 
-socket.on('roundEnd', ({ board, winner, mode, survivalMs }) => {
+socket.on('roundEnd', ({ board, winner, mode, survivalMs, winnerSide, roles }) => {
   state.inGame = false;
   $('roundEnd').classList.remove('hidden');
   const d = I18N[currentLang];
+  if (mode === 'imposter') {
+    impCloseAllModals();
+    $('winnerLine').textContent = winnerSide === 'imposter' ? '🔪 KATILLER KAZANDI' : '🛠️ MASUMLAR KAZANDI';
+    const fb = $('finalBoard'); fb.innerHTML = '';
+    (roles || []).forEach(r => {
+      const div = document.createElement('div'); div.className = 'row';
+      const tag = r.role === 'imposter' ? '<span style="color:#ff3b50">KATIL</span>' : '<span style="color:#4ad2ff">MASUM</span>';
+      div.innerHTML = `<span style="color:${r.color}">${r.name}</span>${tag}`;
+      fb.appendChild(div);
+    });
+    return;
+  }
   if (mode === 'survival') {
     const mm = Math.floor((survivalMs||0)/60000);
     const sec = Math.floor(((survivalMs||0)%60000)/1000);
@@ -1896,6 +1944,10 @@ function getPipRow(lives, maxPips) {
 
 function render() {
   requestAnimationFrame(render);
+  if (state.inGame && state.mode === 'imposter') {
+    if ($('pauseMenu').classList.contains('hidden')) renderImposter();
+    return;
+  }
   if (!state.inGame || !state.serverState) return;
   // Skip world render when fully occluded (pause/round-end overlay open)
   if (!$('pauseMenu').classList.contains('hidden')) return;
@@ -2678,3 +2730,361 @@ if (abilityBtn) abilityBtn.addEventListener('click', () => {
 socket.on('tankMode', ({id, until}) => {
   // (visual handled via state.tank flag)
 });
+
+// =====================================================================
+// IMPOSTER (Among-Us-like) MODE — client
+// =====================================================================
+let impWireTaskId = 0;
+const IMP_USE_R2 = 80 * 80;       // client interaction range (a bit > server)
+const IMP_REPORT_R2 = 100 * 100;
+const IMP_VENT_R2 = 64 * 64;
+
+function impCloseAllModals() {
+  for (const id of ['roleReveal','taskModal','meetingModal','saboMenu']) {
+    const el = $(id); if (el) el.classList.add('hidden');
+  }
+}
+function impMe() {
+  const st = state.imp && state.imp.st;
+  if (!st) return null;
+  return st.players.find(p => p.id === socket.id) || null;
+}
+function impNearestTask() {
+  const me = impMe(); if (!me || !state.imp) return null;
+  const map = state.imp.map.tasks || [];
+  const myTasks = (state.imp.st.self.tasks || []).filter(t => !t.done);
+  let best = null, bestD = IMP_USE_R2;
+  for (const t of myTasks) {
+    const d = (t.x-me.x)**2 + (t.y-me.y)**2;
+    if (d < bestD) { bestD = d; best = t; }
+  }
+  return best;
+}
+function impNearVent() {
+  const me = impMe(); if (!me || !state.imp) return null;
+  for (const v of (state.imp.map.vents||[])) {
+    if ((v.x-me.x)**2 + (v.y-me.y)**2 < IMP_VENT_R2) return v;
+  }
+  return null;
+}
+function impNearCorpse() {
+  const me = impMe(); const st = state.imp && state.imp.st; if (!me || !st) return false;
+  return (st.corpses||[]).some(c => (c.x-me.x)**2 + (c.y-me.y)**2 < IMP_REPORT_R2);
+}
+function impNearEmergency() {
+  const me = impMe(); if (!me || !state.imp) return false;
+  const e = state.imp.map.emergency; if (!e) return false;
+  return (e.x-me.x)**2 + (e.y-me.y)**2 < IMP_USE_R2;
+}
+function impNearFix() {
+  const me = impMe(); const st = state.imp && state.imp.st; if (!me || !st || !st.sabotage) return false;
+  return (st.sabotage.fixPoints||[]).some(f => !f.fixed && (f.x-me.x)**2 + (f.y-me.y)**2 < IMP_USE_R2);
+}
+
+// Context action (E)
+function impUse() {
+  const me = impMe(); const st = state.imp && state.imp.st; if (!me || !st) return;
+  if (st.self.vented) { socket.emit('impVent', { action: 'exit' }); return; }
+  const task = impNearestTask();
+  if (task) { impOpenWire(task.id); return; }
+  if (st.sabotage && st.self.role === 'crew' && impNearFix()) { socket.emit('impFix'); return; }
+  if (impNearEmergency()) { socket.emit('impEmergency'); return; }
+  if (impNearVent() && st.self.role === 'imposter') { socket.emit('impVent', { action: 'enter' }); return; }
+  if (impNearCorpse()) { socket.emit('impReport'); return; }
+}
+function impVentToggle() {
+  const st = state.imp && state.imp.st; if (!st || st.self.role !== 'imposter') return;
+  if (st.self.vented) socket.emit('impVent', { action: 'move' });
+  else if (impNearVent()) socket.emit('impVent', { action: 'enter' });
+}
+function impToggleSaboMenu() {
+  const st = state.imp && state.imp.st; if (!st || st.self.role !== 'imposter') return;
+  $('saboMenu').classList.toggle('hidden');
+}
+
+// ---- socket handlers ----
+socket.on('imposterRole', ({ role, tasks, teammates }) => {
+  if (!state.imp) state.imp = { map:{}, st:null };
+  state.imp.role = role; state.imp.tasks = tasks || []; state.imp.teammates = teammates || [];
+  const t = $('roleTitle'), d = $('roleDesc'), m = $('roleMates');
+  t.className = role === 'imposter' ? 'imp' : 'crew';
+  if (role === 'imposter') {
+    t.textContent = 'KATILSIN';
+    d.textContent = 'Masumları sezdirmeden öldür. Sabotaj yap, ventlerden kaç. Oylamada yakalanma.';
+    m.textContent = (teammates && teammates.length) ? 'Suç ortakların: ' + teammates.map(x=>x.name).join(', ') : 'Tek katil sensin.';
+  } else {
+    t.textContent = 'MASUMSUN';
+    d.textContent = 'Görevlerini tamamla. Katili bul, ceset görünce rapor et, oylamada doğru kişiyi at.';
+    m.textContent = '';
+  }
+  $('roleReveal').classList.remove('hidden');
+  setTimeout(() => $('roleReveal').classList.add('hidden'), 4500);
+});
+
+socket.on('impState', (s) => {
+  if (typeof s.t === 'number') {
+    const off = s.t - Date.now();
+    state.serverTimeOffset = state.serverTimeOffset == null ? off : state.serverTimeOffset*0.9 + off*0.1;
+  }
+  if (!state.imp) state.imp = { map:{}, st:null };
+  state.imp.st = s;
+  // meeting modal open/close driven by phase
+  if (s.phase === 'meeting') {
+    if ($('meetingModal').classList.contains('hidden')) impOpenMeeting();
+    impRefreshMeeting();
+  } else {
+    if (!$('meetingModal').classList.contains('hidden')) $('meetingModal').classList.add('hidden');
+  }
+  impUpdateHud();
+});
+
+socket.on('meetingStart', () => { impOpenMeeting(); });
+socket.on('meetingPhase', () => { impRefreshMeeting(); });
+socket.on('meetingResult', ({ ejected, tie, skip }) => {
+  let txt;
+  if (tie || (!ejected && !skip)) txt = 'Oylama berabere — kimse atılmadı.';
+  else if (skip || !ejected) txt = 'Kimse atılmadı (atlandı).';
+  else txt = `${ejected.name} atıldı — ${ejected.wasImposter ? 'KATILDI! 🔪' : 'masumdu... 😢'}`;
+  $('meetingResult2').textContent = txt;
+  $('voteList').innerHTML = '';
+  $('voteSkip').classList.add('hidden');
+});
+
+socket.on('sabotageStart', ({ type }) => {
+  if (AUD.ctx && !AUD.muted) {
+    const t = AUD.ctx.currentTime;
+    AUD.playNote(48, t, 0.5, 'sawtooth', AUD.sfxGain, 0.25);
+    AUD.playNote(43, t+0.25, 0.5, 'sawtooth', AUD.sfxGain, 0.25);
+  }
+});
+socket.on('sabotageEnd', () => {});
+socket.on('impKillFx', ({ x, y }) => {
+  if (AUD.ctx && !AUD.muted) {
+    const t = AUD.ctx.currentTime;
+    AUD.playNote(72, t, 0.08, 'square', AUD.sfxGain, 0.3);
+    AUD.playNote(48, t+0.05, 0.25, 'sawtooth', AUD.sfxGain, 0.3);
+  }
+});
+socket.on('impYouDied', () => {
+  $('impGhost').classList.remove('hidden');
+});
+
+// ---- HUD update ----
+function impUpdateHud() {
+  const st = state.imp && state.imp.st; if (!st) return;
+  $('impTaskFill').style.width = (st.taskTotal ? (st.taskDone/st.taskTotal*100) : 0) + '%';
+  $('impTaskTxt').textContent = 'Gorevler ' + st.taskDone + '/' + st.taskTotal;
+  $('impGhost').classList.toggle('hidden', st.self.alive);
+  const isImp = st.self.role === 'imposter';
+  const killBtn = $('impKillBtn'), saboBtn = $('impSaboBtn'), ventBtn = $('impVentBtn');
+  killBtn.classList.toggle('hidden', !isImp);
+  saboBtn.classList.toggle('hidden', !isImp);
+  ventBtn.classList.toggle('hidden', !isImp);
+  if (isImp) {
+    const cd = Math.ceil((st.self.killReadyIn||0)/1000);
+    killBtn.disabled = cd > 0;
+    killBtn.textContent = cd > 0 ? ('OLDUR ' + cd + 's') : 'OLDUR (Q)';
+    const scd = Math.ceil((st.self.saboReadyIn||0)/1000);
+    saboBtn.disabled = scd > 0;
+    saboBtn.textContent = scd > 0 ? ('SABOTAJ ' + scd + 's') : 'SABOTAJ (G)';
+    ventBtn.textContent = st.self.vented ? 'VENT GEZ (F)' : 'VENT (F)';
+  }
+  // report enabled near corpse
+  $('impReportBtn').disabled = !impNearCorpse();
+}
+
+// ---- meeting voting UI ----
+function impOpenMeeting() {
+  $('meetingModal').classList.remove('hidden');
+  $('meetingResult2').textContent = '';
+  $('voteSkip').classList.remove('hidden');
+  $('taskModal').classList.add('hidden');
+  $('saboMenu').classList.add('hidden');
+  impRefreshMeeting();
+}
+function impRefreshMeeting() {
+  const st = state.imp && state.imp.st; if (!st || !st.meeting) return;
+  const m = st.meeting;
+  $('meetingTitle').textContent = m.reason === 'report' ? 'CESET BULUNDU' : 'ACIL TOPLANTI';
+  const off = state.serverTimeOffset || 0;
+  const rem = Math.max(0, Math.ceil((m.endsAt - (Date.now()+off))/1000));
+  $('meetingTimer').textContent = (m.phase === 'vote' ? 'OYLAMA: ' : 'TARTISMA: ') + rem + 's';
+  if (m.phase === 'result') return;
+  const me = impMe();
+  const canVote = m.phase === 'vote' && me && me.alive && !(m.voted||[]).includes(socket.id);
+  const list = $('voteList'); list.innerHTML = '';
+  for (const p of st.players) {
+    if (!p.alive) continue;
+    const row = document.createElement('div'); row.className = 'vote-row';
+    const voted = (m.voted||[]).includes(p.id) ? ' ✓' : '';
+    row.innerHTML = `<span class="vname"><span class="vchip" style="background:${p.color}"></span>${p.name}${voted}</span>`;
+    const btn = document.createElement('button');
+    btn.textContent = 'OY VER';
+    btn.disabled = !canVote;
+    btn.onclick = () => { socket.emit('impVote', { target: p.id }); };
+    row.appendChild(btn);
+    list.appendChild(row);
+  }
+  $('voteSkip').disabled = !canVote;
+}
+$('voteSkip').addEventListener('click', () => socket.emit('impVote', { target: 'skip' }));
+
+// ---- HUD button bindings ----
+$('impUseBtn').addEventListener('click', impUse);
+$('impReportBtn').addEventListener('click', () => socket.emit('impReport'));
+$('impKillBtn').addEventListener('click', () => socket.emit('impKill'));
+$('impVentBtn').addEventListener('click', impVentToggle);
+$('impSaboBtn').addEventListener('click', impToggleSaboMenu);
+$('saboLights').addEventListener('click', () => { socket.emit('impSabotage', { type:'lights' }); $('saboMenu').classList.add('hidden'); });
+$('saboReactor').addEventListener('click', () => { socket.emit('impSabotage', { type:'reactor' }); $('saboMenu').classList.add('hidden'); });
+$('saboCancel').addEventListener('click', () => $('saboMenu').classList.add('hidden'));
+
+// ---- wires minigame ----
+let _wireState = null;
+const wireCanvas = $('wireCanvas');
+const wctx = wireCanvas.getContext('2d');
+const WIRE_COLORS = ['#ff4040','#40d040','#4080ff','#ffd24a'];
+function impOpenWire(taskId) {
+  impWireTaskId = taskId;
+  const left = WIRE_COLORS.map((c,i) => ({ c, y: 50+i*60, on:false }));
+  const order = [0,1,2,3].sort(() => Math.random()-0.5);
+  const right = order.map((idx,i) => ({ c: WIRE_COLORS[idx], y: 50+i*60, on:false, ci: idx }));
+  _wireState = { left, right, sel: -1, links: 0 };
+  $('taskModal').classList.remove('hidden');
+  drawWire();
+}
+function drawWire() {
+  if (!_wireState) return;
+  const W = wireCanvas.width, H = wireCanvas.height;
+  wctx.clearRect(0,0,W,H);
+  wctx.fillStyle = '#0a0c12'; wctx.fillRect(0,0,W,H);
+  const ws = _wireState;
+  // draw established links
+  for (const l of ws.left) {
+    if (l.linkY != null) {
+      wctx.strokeStyle = l.c; wctx.lineWidth = 8;
+      wctx.beginPath(); wctx.moveTo(50, l.y); wctx.lineTo(W-50, l.linkY); wctx.stroke();
+    }
+  }
+  // dots
+  for (const l of ws.left) { wctx.fillStyle = l.c; wctx.fillRect(30, l.y-14, 28, 28); }
+  for (const r of ws.right) { wctx.fillStyle = r.c; wctx.fillRect(W-58, r.y-14, 28, 28); }
+  if (ws.sel >= 0) {
+    const l = ws.left[ws.sel];
+    wctx.strokeStyle = '#fff'; wctx.lineWidth = 2; wctx.strokeRect(28, l.y-16, 32, 32);
+  }
+}
+wireCanvas.addEventListener('click', (e) => {
+  if (!_wireState) return;
+  const r = wireCanvas.getBoundingClientRect();
+  const x = (e.clientX - r.left) * (wireCanvas.width / r.width);
+  const y = (e.clientY - r.top) * (wireCanvas.height / r.height);
+  const ws = _wireState;
+  if (x < wireCanvas.width/2) {
+    // pick a left dot
+    for (let i=0;i<ws.left.length;i++) if (Math.abs(ws.left[i].y - y) < 24 && ws.left[i].linkY == null) { ws.sel = i; }
+  } else if (ws.sel >= 0) {
+    // connect to right dot of same color
+    for (const rr of ws.right) {
+      if (Math.abs(rr.y - y) < 24 && !rr.on && rr.c === ws.left[ws.sel].c) {
+        rr.on = true; ws.left[ws.sel].linkY = rr.y; ws.links++; ws.sel = -1;
+        if (AUD.ctx && !AUD.muted) AUD.playNote(72, AUD.ctx.currentTime, 0.1, 'square', AUD.sfxGain, 0.2);
+        break;
+      }
+    }
+  }
+  drawWire();
+  if (ws.links >= 4) {
+    socket.emit('impTask', { id: impWireTaskId });
+    if (AUD.ctx && !AUD.muted) [60,64,67].forEach((n,i)=>AUD.playNote(n, AUD.ctx.currentTime+i*0.06, 0.18,'square',AUD.sfxGain,0.25));
+    setTimeout(() => $('taskModal').classList.add('hidden'), 350);
+    _wireState = null;
+  }
+});
+$('taskClose').addEventListener('click', () => { $('taskModal').classList.add('hidden'); _wireState = null; });
+
+// ---- rendering ----
+function impDrawMarker(ctx, x, y, color, label, highlight) {
+  ctx.save();
+  if (highlight) {
+    const pulse = 0.5 + 0.5*Math.sin(Date.now()/250);
+    ctx.globalAlpha = 0.4 + pulse*0.4;
+    ctx.fillStyle = '#ffd24a';
+    ctx.beginPath(); ctx.arc(x, y, 20 + pulse*4, 0, Math.PI*2); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+  ctx.fillStyle = '#000'; ctx.fillRect(x-12, y-12, 24, 24);
+  ctx.fillStyle = color; ctx.fillRect(x-10, y-10, 20, 20);
+  ctx.fillStyle = '#000'; ctx.font = '12px "Press Start 2P",monospace'; ctx.textAlign='center';
+  ctx.fillText(label, x, y+5);
+  ctx.restore();
+}
+
+function renderImposter() {
+  const st = state.imp && state.imp.st;
+  const W = gameCanvas.width, H = gameCanvas.height;
+  gctx.imageSmoothingEnabled = false;
+  gctx.fillStyle = '#0a0a14'; gctx.fillRect(0,0,W,H);
+  if (!st) return;
+  const me = impMe();
+  const cx = me ? me.x : state.mapW/2, cy = me ? me.y : state.mapH/2;
+  const targetCamX = Math.max(0, Math.min(state.mapW - W, cx - W/2));
+  const targetCamY = Math.max(0, Math.min(state.mapH - H, cy - H/2));
+  camX += (targetCamX - camX) * 0.18;
+  camY += (targetCamY - camY) * 0.18;
+  if (state.mapW < W) camX = (state.mapW - W)/2;
+  if (state.mapH < H) camY = (state.mapH - H)/2;
+  if (groundCache) {
+    const icx = Math.floor(camX), icy = Math.floor(camY);
+    const srcX = Math.max(0, icx), srcY = Math.max(0, icy);
+    const srcW = Math.min(W, state.mapW - srcX), srcH = Math.min(H, state.mapH - srcY);
+    const dstX = srcX - icx, dstY = srcY - icy;
+    if (srcW > 0 && srcH > 0) gctx.drawImage(groundCache, srcX, srcY, srcW, srcH, dstX, dstY, srcW, srcH);
+  }
+  const map = state.imp.map || {};
+  const myUndone = new Set((st.self.tasks||[]).filter(t=>!t.done).map(t=>t.id));
+  // task points
+  for (const t of (map.tasks||[])) impDrawMarker(gctx, t.x-camX, t.y-camY, '#3fd6c0', '✦', myUndone.has(t.id));
+  // vents (only emphasized for impostor)
+  for (const v of (map.vents||[])) {
+    const isImp = st.self.role === 'imposter';
+    impDrawMarker(gctx, v.x-camX, v.y-camY, isImp ? '#a06aff' : '#555', '≣', false);
+  }
+  // emergency button
+  if (map.emergency) impDrawMarker(gctx, map.emergency.x-camX, map.emergency.y-camY, '#ff4040', '!', impNearEmergency());
+  // sabotage fix points
+  if (st.sabotage) for (const f of st.sabotage.fixPoints) if (!f.fixed)
+    impDrawMarker(gctx, f.x-camX, f.y-camY, '#ffae20', '⚒', st.self.role==='crew');
+  // corpses
+  for (const c of (st.corpses||[])) {
+    const x = c.x-camX, y = c.y-camY;
+    gctx.save();
+    gctx.fillStyle = 'rgba(120,0,0,0.5)'; gctx.beginPath(); gctx.ellipse(x, y+4, 20, 8, 0, 0, Math.PI*2); gctx.fill();
+    gctx.fillStyle = c.color; gctx.beginPath(); gctx.arc(x, y, 12, 0, Math.PI*2); gctx.fill();
+    gctx.fillStyle = '#fff'; gctx.fillRect(x-6, y-3, 4, 4); gctx.fillRect(x+2, y-3, 4, 4);
+    gctx.restore();
+  }
+  // players
+  for (const p of st.players) {
+    const x = p.x-camX, y = p.y-camY;
+    if (x < -40 || y < -40 || x > W+40 || y > H+40) continue;
+    gctx.save();
+    if (!p.alive || p.vented) gctx.globalAlpha = 0.5;
+    drawRobotTopDown(gctx, x, y, p.color, p.angle||0, true, p.id, p.x, p.y, '', null, '');
+    gctx.restore();
+    gctx.fillStyle = '#000'; gctx.fillRect(x-30, y+22, 60, 12);
+    gctx.fillStyle = p.id===socket.id ? '#ffd24a' : '#fff';
+    gctx.font='10px "Press Start 2P",monospace'; gctx.textAlign='center';
+    gctx.fillText((p.name||'').slice(0,8), x, y+32);
+  }
+  // vision mask (ghosts see all)
+  if (me && st.self.alive) {
+    const lightsOut = st.sabotage && st.sabotage.type === 'lights';
+    const vis = lightsOut ? 150 : 330;
+    const mx = me.x-camX, my = me.y-camY;
+    const grad = gctx.createRadialGradient(mx, my, vis*0.55, mx, my, vis);
+    grad.addColorStop(0, 'rgba(0,0,0,0)');
+    grad.addColorStop(1, lightsOut ? 'rgba(0,0,0,0.97)' : 'rgba(0,0,0,0.9)');
+    gctx.fillStyle = grad; gctx.fillRect(0,0,W,H);
+  }
+}

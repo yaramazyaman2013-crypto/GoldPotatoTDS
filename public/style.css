@@ -432,3 +432,53 @@ canvas { image-rendering: pixelated; display: block; }
 .brush-swatch {
   width: 14px; height: 14px; border: 2px solid #000; display: inline-block;
 }
+
+/* ===== IMPOSTER MODE UI ===== */
+#impHud { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
+#impTaskBar {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+  width: 300px; height: 22px; background: #11131c; border: 3px solid #000;
+  box-shadow: 0 0 0 2px #4ad2c2;
+}
+#impTaskFill { height: 100%; width: 0%; background: #5ec8ff; transition: width .25s; }
+#impTaskBar span {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-family: 'Press Start 2P', monospace; font-size: 9px; color: #fff; text-shadow: 1px 1px 0 #000;
+}
+#impButtons {
+  position: absolute; right: 18px; bottom: 18px; display: flex; flex-direction: column;
+  gap: 8px; align-items: flex-end; pointer-events: auto;
+}
+.imp-btn {
+  font-family: 'Press Start 2P', monospace; font-size: 11px; padding: 12px 16px;
+  background: #2a8acb; color: #fff; border: none; cursor: pointer;
+  box-shadow: 4px 4px 0 #0a3a5a, 0 0 0 3px #001a2a; text-shadow: 1px 1px 0 #000;
+}
+.imp-btn:disabled { opacity: .45; cursor: default; }
+.imp-btn.kill { background: #d8243a; box-shadow: 4px 4px 0 #6a1018, 0 0 0 3px #2a0008; }
+.imp-btn.sabo { background: #e08a1a; box-shadow: 4px 4px 0 #6a4000, 0 0 0 3px #2a1a00; }
+.imp-btn.vent { background: #7a4ad2; box-shadow: 4px 4px 0 #3a1a6a, 0 0 0 3px #1a002a; }
+#impGhost {
+  position: absolute; top: 44px; left: 50%; transform: translateX(-50%);
+  font-family: 'Press Start 2P', monospace; font-size: 10px; color: #bfeaff;
+  background: rgba(0,0,0,.55); padding: 6px 12px; text-shadow: 1px 1px 0 #000;
+}
+#rolePanel { text-align: center; }
+#roleTitle { font-family: 'Press Start 2P', monospace; font-size: 34px; margin: 10px 0; }
+#roleTitle.imp { color: #ff3b50; text-shadow: 3px 3px 0 #2a0008; }
+#roleTitle.crew { color: #4ad2ff; text-shadow: 3px 3px 0 #002a3a; }
+.meeting-panel { min-width: 360px; }
+.vote-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; max-height: 320px; overflow-y: auto; }
+.vote-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: #1a1c26; padding: 8px 12px; border: 2px solid #000;
+}
+.vote-row button {
+  font-family: 'Press Start 2P', monospace; font-size: 9px; padding: 6px 10px;
+  background: #c43030; color: #fff; border: none; cursor: pointer;
+}
+.vote-row.voted-for { box-shadow: 0 0 0 3px #ffd24a; }
+.vote-row .vname { font-family: 'Press Start 2P', monospace; font-size: 11px; display: flex; align-items: center; gap: 8px; }
+.vote-row .vchip { width: 16px; height: 16px; border: 2px solid #000; display: inline-block; }
+.vote-row .vcount { font-family: 'Press Start 2P', monospace; font-size: 10px; color: #ffd24a; }
+#wireCanvas { background: #0a0c12; border: 3px solid #000; margin: 8px 0; cursor: pointer; display: block; }
