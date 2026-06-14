@@ -747,10 +747,10 @@ function survDifficulty(room, now) {
   return {
     mins,
     // Balanced scaling — zombies stay a threat but remain beatable.
-    hp:    C.SURV_MON_HP + Math.floor(mins * 1.4),
+    hp:    C.SURV_MON_HP + Math.floor(mins * 1.7),
     // Cap speed below the player's so they always stay kiteable.
-    speed: C.SURV_MON_SPEED + Math.min(1.4, mins * 0.08),
-    dmg:   C.SURV_MON_DMG + Math.floor(mins / 4),
+    speed: C.SURV_MON_SPEED + Math.min(1.5, mins * 0.085),
+    dmg:   C.SURV_MON_DMG + Math.floor(mins / 3),
     interval: Math.max(C.SURV_SPAWN_MIN_MS, C.SURV_SPAWN_START_MS - mins * 85),
     batch: 2 + Math.floor(mins / 2.5),
   };
@@ -1861,7 +1861,7 @@ function tick(room) {
           for (const z of room.monsters) {
             if (z !== mo && !z.boss && (z.x-mo.x)**2 + (z.y-mo.y)**2 < 160*160) neighbours.push(z);
           }
-          if (neighbours.length && Math.random() < 0.12) {
+          if (neighbours.length && Math.random() < 0.035) {
             const z = neighbours[Math.floor(Math.random()*neighbours.length)];
             const zi = room.monsters.indexOf(z); if (zi >= 0) room.monsters.splice(zi, 1);
             room.bullets.push({
