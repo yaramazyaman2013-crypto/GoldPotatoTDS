@@ -1714,16 +1714,20 @@ function drawGem(ctx, x, y) {
   const pulse = 0.6 + 0.4 * Math.sin(t + (x + y) * 0.05);
   ctx.save();
   ctx.translate(x, y);
-  ctx.globalAlpha = 0.4 + pulse * 0.3;
-  ctx.fillStyle = '#aef542';
-  ctx.beginPath(); ctx.arc(0, 0, 6, 0, Math.PI*2); ctx.fill();
+  // glow
+  ctx.globalAlpha = 0.35 + pulse * 0.3;
+  ctx.fillStyle = '#9ef542';
+  ctx.beginPath(); ctx.arc(0, 0, 7, 0, Math.PI*2); ctx.fill();
   ctx.globalAlpha = 1;
-  ctx.fillStyle = '#5ec800';
-  ctx.beginPath();
-  ctx.moveTo(0, -5); ctx.lineTo(4, 0); ctx.lineTo(0, 5); ctx.lineTo(-4, 0);
-  ctx.closePath(); ctx.fill();
-  ctx.fillStyle = '#dfffa0';
-  ctx.fillRect(-1, -3, 2, 2);
+  // faceted crystal: dark outline + two-tone facets
+  ctx.fillStyle = '#2f6e10';
+  ctx.beginPath(); ctx.moveTo(0,-7); ctx.lineTo(5,0); ctx.lineTo(0,7); ctx.lineTo(-5,0); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#7ddb2a'; // left facet
+  ctx.beginPath(); ctx.moveTo(0,-6); ctx.lineTo(0,6); ctx.lineTo(-4,0); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#aef55a'; // right facet (brighter)
+  ctx.beginPath(); ctx.moveTo(0,-6); ctx.lineTo(4,0); ctx.lineTo(0,6); ctx.closePath(); ctx.fill();
+  // sparkle
+  ctx.fillStyle = '#eaffc0'; ctx.fillRect(-1, -3, 2, 2);
   ctx.restore();
 }
 
@@ -1780,46 +1784,69 @@ function drawCrate(ctx, x, y, frac) {
   ctx.restore();
 }
 
-// Survival monster: a chunky pixel zombie/ghost that pulses as it moves
+// Survival monster: a shambling zombie with head, lurching arms and a mouth.
 function drawMonster(ctx, x, y, m) {
   const t = Date.now() * 0.006;
-  const wob = Math.sin(t + (m.id || 0)) * 1.5;
+  const id = m.id || 0;
+  const wob = Math.sin(t + id) * 1.6;           // bob up/down
+  const lurch = Math.sin(t*1.4 + id);            // arm swing
   const r = m.r || 12;
+  // colour sets per tier
+  const skin = m.boss ? '#9b59ff' : (m.elite ? '#c63a48' : '#6e9a45');
+  const skinD = m.boss ? '#5a2bb0' : (m.elite ? '#7e1c26' : '#456a2a');
+  const skinL = m.boss ? '#c9a6ff' : (m.elite ? '#e3737d' : '#9bc46a');
   ctx.save();
   ctx.translate(x, y + wob);
   // shadow
-  ctx.fillStyle = 'rgba(0,0,0,0.3)';
-  ctx.beginPath(); ctx.ellipse(0, r - 1 - wob, r*0.8, 3, 0, 0, Math.PI*2); ctx.fill();
-  // body (boss = purple, elite = red, normal = green)
-  const body = m.boss ? '#8a2be2' : (m.elite ? '#b02030' : '#5a7d3a');
-  const dark = m.boss ? '#4b1480' : (m.elite ? '#6a1018' : '#37501f');
+  ctx.fillStyle = 'rgba(0,0,0,0.32)';
+  ctx.beginPath(); ctx.ellipse(0, r - wob, r*0.95, 3.5, 0, 0, Math.PI*2); ctx.fill();
+  // boss aura
   if (m.boss) {
     const gp = 0.4 + 0.3*Math.sin(Date.now()/180);
     ctx.fillStyle = `rgba(180,80,255,${gp*0.4})`;
-    ctx.beginPath(); ctx.arc(0, 0, r+10, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(0, 0, r+12, 0, Math.PI*2); ctx.fill();
   }
-  ctx.fillStyle = dark;
-  ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI*2); ctx.fill();
-  ctx.fillStyle = body;
-  ctx.beginPath(); ctx.arc(0, -1, r - 2, 0, Math.PI*2); ctx.fill();
+  // outstretched arms (reaching toward prey)
+  ctx.strokeStyle = skinD; ctx.lineWidth = Math.max(3, r*0.32); ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(-r*0.5, 0); ctx.lineTo(-r*0.95, r*0.55 + lurch*2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo( r*0.5, 0); ctx.lineTo( r*0.95, r*0.55 - lurch*2); ctx.stroke();
+  // body
+  ctx.fillStyle = skinD; ctx.beginPath(); ctx.arc(0, 1, r, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = skin;  ctx.beginPath(); ctx.arc(0, 0, r - 2, 0, Math.PI*2); ctx.fill();
+  // a few rot blotches
+  ctx.fillStyle = skinD;
+  ctx.beginPath(); ctx.arc(-r*0.35, r*0.3, r*0.18, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc( r*0.4, -r*0.1, r*0.14, 0, Math.PI*2); ctx.fill();
+  // top highlight
+  ctx.fillStyle = skinL;
+  ctx.beginPath(); ctx.arc(-r*0.25, -r*0.45, r*0.28, 0, Math.PI*2); ctx.fill();
+  // glowing eyes
+  const eyeC = (m.elite || m.boss) ? '#ffe24a' : '#ff3a2a';
+  const ew = Math.max(2.2, r*0.24), ey = -r*0.22;
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(-r*0.46-1, ey-1, ew+2, ew+2); ctx.fillRect(r*0.46-ew-1, ey-1, ew+2, ew+2);
+  ctx.fillStyle = eyeC;
+  ctx.fillRect(-r*0.46, ey, ew, ew); ctx.fillRect(r*0.46-ew, ey, ew, ew);
+  // jagged mouth
+  ctx.strokeStyle = '#1a0a0a'; ctx.lineWidth = Math.max(1.4, r*0.12);
+  ctx.beginPath();
+  ctx.moveTo(-r*0.4, r*0.42);
+  ctx.lineTo(-r*0.13, r*0.28); ctx.lineTo(0, r*0.46);
+  ctx.lineTo(r*0.13, r*0.28); ctx.lineTo(r*0.4, r*0.42);
+  ctx.stroke();
+  // boss crown
   if (m.boss) {
-    // little crown
     ctx.fillStyle = '#ffd24a';
     ctx.beginPath();
-    ctx.moveTo(-r*0.6, -r*0.6); ctx.lineTo(-r*0.6, -r); ctx.lineTo(-r*0.2, -r*0.7);
-    ctx.lineTo(0, -r*1.05); ctx.lineTo(r*0.2, -r*0.7); ctx.lineTo(r*0.6, -r);
-    ctx.lineTo(r*0.6, -r*0.6); ctx.closePath(); ctx.fill();
+    ctx.moveTo(-r*0.6, -r*0.62); ctx.lineTo(-r*0.6, -r*1.02); ctx.lineTo(-r*0.2, -r*0.72);
+    ctx.lineTo(0, -r*1.08); ctx.lineTo(r*0.2, -r*0.72); ctx.lineTo(r*0.6, -r*1.02);
+    ctx.lineTo(r*0.6, -r*0.62); ctx.closePath(); ctx.fill();
   }
-  // eyes
-  ctx.fillStyle = (m.elite || m.boss) ? '#ffd24a' : '#ff3030';
-  const ew = Math.max(2, r*0.22);
-  ctx.fillRect(-r*0.4, -r*0.25, ew, ew);
-  ctx.fillRect(r*0.4 - ew, -r*0.25, ew, ew);
   // hp bar if hurt
   if (m.hp < m.maxHp) {
     const bw = r*2, bf = Math.max(0, m.hp/m.maxHp) * bw;
-    ctx.fillStyle = '#000'; ctx.fillRect(-r, -r-7, bw, 3);
-    ctx.fillStyle = m.elite ? '#ffcf3a' : '#9ce04a'; ctx.fillRect(-r, -r-7, bf, 3);
+    ctx.fillStyle = '#000'; ctx.fillRect(-r, -r-8, bw, 3);
+    ctx.fillStyle = m.boss ? '#d29bff' : (m.elite ? '#ffcf3a' : '#9ce04a'); ctx.fillRect(-r, -r-8, bf, 3);
   }
   ctx.restore();
 }
