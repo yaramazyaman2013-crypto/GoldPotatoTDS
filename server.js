@@ -515,7 +515,7 @@ function addPlayer(room, id, name, color, cls) {
     wAura: 0, wOrbit: 0, wLightning: 0, wMissile: 0,
     wWand: 0, wKnife: 0, wAxe: 0, wFire: 0, wHoly: 0, wCross: 0, wWhip: 0,
     auraAt: 0, lightningAt: 0, missileAt: 0, orbitAngle: 0, auraR: 0, orbs: null,
-    wandAt: 0, knifeAt: 0, axeAt: 0, fireAt: 0, holyAt: 0, crossAt: 0, whipAt: 0, iframeUntil: 0, stunUntil: 0,
+    wandAt: 0, knifeAt: 0, axeAt: 0, fireAt: 0, holyAt: 0, crossAt: 0, whipAt: 0, iframeUntil: 0, stunUntil: 0, throwState: null,
     // Imposter mode
     role: 'crew', tasks: [], killReadyAt: 0, emergencyUsed: 0,
     vented: false, ventGroup: null, ventId: 0,
@@ -1028,6 +1028,7 @@ function startRound(room) {
     resetPerks(p);
     p.perkQueue = []; p.perkShowing = false;
     p.respawnAt = 0; p.lastRegenAt = now;
+    p.throwState = null; p.stunUntil = 0; p.iframeUntil = 0;
   }
   for (let i = 0; i < 4; i++) spawnHeart(room);
   spawnRocketPickup(room);
@@ -1596,6 +1597,22 @@ function tick(room) {
   for (const p of room.players.values()) {
     if (!p.alive) continue;
 
+    // Boss grab-and-throw: held in the boss's hand, then glides to a random
+    // spot. Player can't act/move until they land (no teleport).
+    if (p.throwState) {
+      const ts = p.throwState;
+      if (ts.phase === 'grab') {
+        p.x = ts.hx; p.y = ts.hy;
+        if (now >= ts.until) { ts.phase = 'fly'; ts.flyStart = now; ts.x0 = p.x; ts.y0 = p.y; }
+      } else {
+        const k = Math.min(1, (now - ts.flyStart) / ts.flyDur);
+        p.x = ts.x0 + (ts.destX - ts.x0) * k;
+        p.y = ts.y0 + (ts.destY - ts.y0) * k;
+        if (k >= 1) { p.throwState = null; }
+      }
+      continue; // skip normal movement / firing / pickups while airborne
+    }
+
     // Class passive: Cyber auto-rockets
     if (p.cls === 'cyber' && now - p.lastCyberRocketAt >= C.CYBER_ROCKET_INTERVAL) {
       p.rockets += C.CYBER_ROCKET_PER_INTERVAL;
@@ -1836,21 +1853,33 @@ function tick(room) {
           io.to(room.code).emit('spit', { x: Math.round(mo.x), y: Math.round(mo.y) });
         }
         // Boss: at close range, punch (knockback) or grab-and-throw the player.
-        if (mo.boss && bestD < C.BOSS_PUNCH_RANGE*C.BOSS_PUNCH_RANGE && now >= (mo.punchAt||0)) {
+        if (mo.boss && bestD < C.BOSS_PUNCH_RANGE*C.BOSS_PUNCH_RANGE && now >= (mo.punchAt||0) && !target.throwState) {
           mo.punchAt = now + C.BOSS_PUNCH_CD;
           if (now >= (target.iframeUntil || 0)) {
-            target.iframeUntil = now + C.SURV_HURT_IFRAME_MS;
             const ang = Math.atan2(target.y-mo.y, target.x-mo.x);
             const isThrow = ((mo.punchCount = (mo.punchCount||0)+1) % 2) === 0;
             applyDamage(room, target, mo.dmg * (isThrow ? 2 : 1), null);
             const MW = room.mapW || C.MAP_W, MH = room.mapH || C.MAP_H;
-            let dist = isThrow ? 210 : 70;
-            let nx = target.x + Math.cos(ang)*dist, ny = target.y + Math.sin(ang)*dist;
-            if (hitsWallList(room.walls, nx, ny, C.PLAYER_R)) { nx = target.x + Math.cos(ang)*60; ny = target.y + Math.sin(ang)*60; }
-            target.x = Math.max(20, Math.min(MW-20, nx));
-            target.y = Math.max(20, Math.min(MH-20, ny));
-            if (isThrow) target.stunUntil = now + 550;
-            io.to(room.code).emit(isThrow ? 'bossThrow' : 'bossPunch', { id: target.id, x: Math.round(target.x), y: Math.round(target.y) });
+            if (isThrow) {
+              // Grab the player into the boss's hand, then fling to a random
+              // open spot — gliding through the air (no teleport).
+              let rx, ry, tries = 24;
+              do { rx = 90 + Math.random()*(MW-180); ry = 90 + Math.random()*(MH-180); }
+              while (hitsWallList(room.walls, rx, ry, C.PLAYER_R) && --tries > 0);
+              const hx = mo.x + Math.cos(ang)*(mo.r+8);
+              const hy = mo.y + Math.sin(ang)*(mo.r+8) - 8;
+              target.throwState = { phase:'grab', until: now+450, hx, hy, destX:rx, destY:ry, flyDur:800 };
+              // invuln through the whole grab+flight+landing
+              target.iframeUntil = now + 450 + 800 + 300;
+              io.to(room.code).emit('bossThrow', { id: target.id, x: Math.round(mo.x), y: Math.round(mo.y) });
+            } else {
+              target.iframeUntil = now + C.SURV_HURT_IFRAME_MS;
+              let nx = target.x + Math.cos(ang)*70, ny = target.y + Math.sin(ang)*70;
+              if (hitsWallList(room.walls, nx, ny, C.PLAYER_R)) { nx = target.x + Math.cos(ang)*40; ny = target.y + Math.sin(ang)*40; }
+              target.x = Math.max(20, Math.min(MW-20, nx));
+              target.y = Math.max(20, Math.min(MH-20, ny));
+              io.to(room.code).emit('bossPunch', { x: Math.round(target.x), y: Math.round(target.y) });
+            }
           }
         }
       }
@@ -2185,6 +2214,7 @@ function tick(room) {
         xp:p.xp, level:p.level, xpToNext:p.xpToNext,
         respawnIn: (room.mode === 'survival' && !p.alive && p.respawnAt) ? Math.max(0, p.respawnAt - now) : 0,
         auraR: p.auraR || 0, orbs: p.orbs || null,
+        airborne: !!p.throwState,
         alive:p.alive, kills:p.kills,
       })),
       bullets: room.bullets.map(b=>({id:b.id, x:b.x, y:b.y, type:b.type||'bullet', angle:b.angle})),

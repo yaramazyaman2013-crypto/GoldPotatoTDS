@@ -1392,15 +1392,24 @@ socket.on('spit', () => {
   AUD.playNote(52, t + 0.05, 0.12, 'sawtooth', AUD.sfxGain, 0.20);
   AUD.playNote(40, t + 0.13, 0.10, 'square', AUD.sfxGain, 0.14);
 });
-// Boss punch / grab-throw — heavy thud + brief screen shake.
+// Boss punch / grab-throw — heavy thud + brief screen shake + arm animation.
+let bossAnim = { type: null, t: 0 };
+let _mePos = { x: 0, y: 0 };
 function bossHitFx(big) {
   if (AUD.ctx && !AUD.muted) {
     const t = AUD.ctx.currentTime;
     AUD.playNote(36, t, 0.18, 'square', AUD.sfxGain, 0.35);
     AUD.playNote(28, t + 0.04, 0.22, 'sawtooth', AUD.sfxGain, 0.3);
+    if (big) {
+      // monstrous roar: layered low growl rising
+      AUD.playNote(31, t, 0.55, 'sawtooth', AUD.sfxGain, 0.32);
+      AUD.playNote(34, t + 0.12, 0.5, 'square', AUD.sfxGain, 0.22);
+      AUD.playNote(40, t + 0.28, 0.4, 'sawtooth', AUD.sfxGain, 0.18);
+    }
   }
-  shakeUntil = Date.now() + (big ? 320 : 160);
-  shakeMag = big ? 9 : 5;
+  shakeUntil = Date.now() + (big ? 380 : 160);
+  shakeMag = big ? 11 : 5;
+  bossAnim = { type: big ? 'throw' : 'punch', t: Date.now() };
 }
 socket.on('bossPunch', () => bossHitFx(false));
 socket.on('bossThrow', () => bossHitFx(true));
@@ -1897,16 +1906,27 @@ function drawMonster(ctx, x, y, m) {
   // animated arms (boss has two longer reaching arms with fists)
   const skinD = tier==='boss' ? '#5a2bb0' : (tier==='elite' ? '#7e1c26' : (tier==='acid' ? '#5f7a16' : '#456a2a'));
   if (m.boss) {
-    const reach = r*1.5, drop = r*0.7;
+    const now2 = Date.now();
+    const dur = bossAnim.type === 'throw' ? 750 : 280;
+    const punchT = bossAnim.type && (now2 - bossAnim.t) < dur ? 1 - (now2 - bossAnim.t)/dur : 0;
+    const ang = Math.atan2(_mePos.y - m.y, _mePos.x - m.x); // boss -> player
     ctx.strokeStyle = skinD; ctx.lineWidth = Math.max(4, r*0.34); ctx.lineCap = 'round';
-    const lx = x - reach, lyy = cy + drop + lurch*5;
-    const rx = x + reach, ryy = cy + drop - lurch*5;
-    ctx.beginPath(); ctx.moveTo(x-r*0.5, cy); ctx.lineTo(x-r*0.95, cy); ctx.lineTo(lx, lyy); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(x+r*0.5, cy); ctx.lineTo(x+r*0.95, cy); ctx.lineTo(rx, ryy); ctx.stroke();
-    // fists
     ctx.fillStyle = '#7b46c8';
-    ctx.beginPath(); ctx.arc(lx, lyy, r*0.34, 0, Math.PI*2); ctx.fill();
-    ctx.beginPath(); ctx.arc(rx, ryy, r*0.34, 0, Math.PI*2); ctx.fill();
+    for (const side of [-1, 1]) {
+      let hx, hy;
+      if (punchT > 0) {
+        // thrust both arms toward the player (punch / grab)
+        const reach = r*1.4 + punchT * r*2.0;
+        const perp = side * r*0.45 * (1 - punchT);
+        hx = x + Math.cos(ang)*reach + Math.cos(ang+Math.PI/2)*perp;
+        hy = cy + Math.sin(ang)*reach + Math.sin(ang+Math.PI/2)*perp;
+      } else {
+        hx = x + side*r*1.5;
+        hy = cy + r*0.7 - side*lurch*5;
+      }
+      ctx.beginPath(); ctx.moveTo(x + side*r*0.5, cy); ctx.lineTo(x + side*r*0.95, cy); ctx.lineTo(hx, hy); ctx.stroke();
+      ctx.beginPath(); ctx.arc(hx, hy, r*0.36, 0, Math.PI*2); ctx.fill();
+    }
   } else {
     ctx.strokeStyle = skinD; ctx.lineWidth = Math.max(3, r*0.32); ctx.lineCap = 'round';
     ctx.beginPath(); ctx.moveTo(x-r*0.5, cy); ctx.lineTo(x-r*0.95, cy + r*0.55 + lurch*2); ctx.stroke();
@@ -2220,6 +2240,7 @@ function render() {
   // Use interpolated state for smooth visual positions
   const ss = getInterpState();
   const me = ss.players.find(p => p.id === socket.id);
+  if (me) { _mePos.x = me.x; _mePos.y = me.y; }
   const W = gameCanvas.width, H = gameCanvas.height;
 
   // Camera follows our local player; use interpolated position for smooth tracking
@@ -2522,7 +2543,17 @@ function render() {
         gctx.beginPath(); gctx.arc(ox, oy, 3, 0, Math.PI*2); gctx.fill();
       }
     }
-    if (p.tank) {
+    if (p.airborne) {
+      // being flung by the boss — gliding above the ground (shadow stays below)
+      gctx.fillStyle = 'rgba(0,0,0,0.3)';
+      gctx.beginPath(); gctx.ellipse(px, py+10, 13, 4, 0, 0, Math.PI*2); gctx.fill();
+      gctx.save();
+      gctx.translate(px, py - 26);
+      gctx.rotate(Math.sin(Date.now()/90) * 0.5);  // tumbling
+      gctx.scale(1.12, 1.12);
+      drawRobotTopDown(gctx, 0, 0, p.color, p.angle, p.alive, p.id, p.x, p.y, p.hat||'', p.hatCfg, p.cls||'');
+      gctx.restore();
+    } else if (p.tank) {
       gctx.save();
       gctx.translate(px, py);
       gctx.scale(1.5, 1.5);
