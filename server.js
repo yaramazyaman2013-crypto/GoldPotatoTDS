@@ -784,8 +784,8 @@ function spawnMonster(room, diff) {
   }
   // Occasional tougher "elite" (bigger, more hp, more xp)
   const elite = diff.mins > 1 && Math.random() < 0.06;
-  // Acid zombies (ranged spitters) appear once things get going
-  const acid = !elite && diff.mins > 0.5 && Math.random() < 0.12;
+  // Acid zombies (ranged spitters) are a rare threat
+  const acid = !elite && diff.mins > 1 && Math.random() < 0.04;
   const curse = diff.curse || 0;
   const spd = (elite ? diff.speed * 0.8 : (acid ? diff.speed * 0.82 : diff.speed)) * (1 + curse * 0.08);
   room.monsters.push({
