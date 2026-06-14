@@ -1702,135 +1702,134 @@ function drawSoda(ctx, x, y) {
   ctx.restore();
 }
 
+// Generic offscreen sprite cache: render `draw(ctx)` once with the origin at the
+// canvas centre, then reuse the bitmap. Keeps the render loop to cheap
+// drawImage() calls instead of re-running path math for every entity per frame.
+const _spriteCache = new Map();
+function sprite(key, w, h, draw) {
+  let cv = _spriteCache.get(key);
+  if (cv) return cv;
+  cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const c = cv.getContext('2d'); c.translate(w/2, h/2); draw(c);
+  _spriteCache.set(key, cv);
+  return cv;
+}
+
 // Power-up visual config: color + a simple pixel glyph drawn on a floating orb.
 const POWERUP_STYLE = {
   speed:  { color: '#34d6ff', glow: '#0090d0' },
   damage: { color: '#ff5a3c', glow: '#c02000' },
   shield: { color: '#5aa0ff', glow: '#2050c0' },
 };
+function powerupSprite(type) {
+  return sprite('pu_' + type, 26, 26, (c) => {
+    const st = POWERUP_STYLE[type] || POWERUP_STYLE.speed;
+    c.fillStyle = '#11131c'; c.beginPath(); c.arc(0, 0, 11, 0, Math.PI*2); c.fill();
+    c.fillStyle = st.color;  c.beginPath(); c.arc(0, 0, 9, 0, Math.PI*2); c.fill();
+    c.fillStyle = '#0a0a12';
+    if (type === 'speed') {
+      c.beginPath(); c.moveTo(1,-6); c.lineTo(-4,1); c.lineTo(-1,1); c.lineTo(-1,6); c.lineTo(4,-1); c.lineTo(1,-1); c.closePath(); c.fill();
+    } else if (type === 'damage') {
+      c.beginPath(); c.moveTo(0,-6); c.lineTo(5,1); c.lineTo(2,1); c.lineTo(2,6); c.lineTo(-2,6); c.lineTo(-2,1); c.lineTo(-5,1); c.closePath(); c.fill();
+    } else {
+      c.beginPath(); c.moveTo(0,-6); c.lineTo(5,-4); c.lineTo(5,1); c.quadraticCurveTo(5,5,0,7); c.quadraticCurveTo(-5,5,-5,1); c.lineTo(-5,-4); c.closePath(); c.fill();
+    }
+  });
+}
 function drawPowerup(ctx, x, y, type) {
   const st = POWERUP_STYLE[type] || POWERUP_STYLE.speed;
   const bob = Math.sin(Date.now() / 300) * 2;
   const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 200);
-  ctx.save();
-  // ground shadow
+  const cy = y + bob;
   ctx.fillStyle = 'rgba(0,0,0,0.35)';
   ctx.beginPath(); ctx.ellipse(x, y+11, 11, 4, 0, 0, Math.PI*2); ctx.fill();
-  const cy = y + bob;
-  // outer glow ring
-  ctx.globalAlpha = 0.25 + pulse * 0.25;
-  ctx.fillStyle = st.glow;
-  ctx.beginPath(); ctx.arc(x, cy, 15 + pulse * 3, 0, Math.PI*2); ctx.fill();
-  // orb body
-  ctx.globalAlpha = 1;
-  ctx.fillStyle = '#11131c';
-  ctx.beginPath(); ctx.arc(x, cy, 11, 0, Math.PI*2); ctx.fill();
-  ctx.fillStyle = st.color;
-  ctx.beginPath(); ctx.arc(x, cy, 9, 0, Math.PI*2); ctx.fill();
-  // glyph
-  ctx.fillStyle = '#0a0a12';
-  if (type === 'speed') {
-    // lightning bolt
-    ctx.beginPath();
-    ctx.moveTo(x+1, cy-6); ctx.lineTo(x-4, cy+1); ctx.lineTo(x-1, cy+1);
-    ctx.lineTo(x-1, cy+6); ctx.lineTo(x+4, cy-1); ctx.lineTo(x+1, cy-1);
-    ctx.closePath(); ctx.fill();
-  } else if (type === 'damage') {
-    // up-arrow (power)
-    ctx.beginPath();
-    ctx.moveTo(x, cy-6); ctx.lineTo(x+5, cy+1); ctx.lineTo(x+2, cy+1);
-    ctx.lineTo(x+2, cy+6); ctx.lineTo(x-2, cy+6); ctx.lineTo(x-2, cy+1);
-    ctx.lineTo(x-5, cy+1); ctx.closePath(); ctx.fill();
-  } else {
-    // shield outline
-    ctx.beginPath();
-    ctx.moveTo(x, cy-6); ctx.lineTo(x+5, cy-4); ctx.lineTo(x+5, cy+1);
-    ctx.quadraticCurveTo(x+5, cy+5, x, cy+7);
-    ctx.quadraticCurveTo(x-5, cy+5, x-5, cy+1);
-    ctx.lineTo(x-5, cy-4); ctx.closePath(); ctx.fill();
-  }
-  ctx.restore();
-}
-
-// XP gem dropped by monsters (small glowing diamond)
-function drawGem(ctx, x, y) {
-  const t = Date.now() * 0.004;
-  const pulse = 0.6 + 0.4 * Math.sin(t + (x + y) * 0.05);
   ctx.save();
-  ctx.translate(x, y);
-  // glow
-  ctx.globalAlpha = 0.35 + pulse * 0.3;
-  ctx.fillStyle = '#9ef542';
-  ctx.beginPath(); ctx.arc(0, 0, 7, 0, Math.PI*2); ctx.fill();
-  ctx.globalAlpha = 1;
-  // faceted crystal: dark outline + two-tone facets
-  ctx.fillStyle = '#2f6e10';
-  ctx.beginPath(); ctx.moveTo(0,-7); ctx.lineTo(5,0); ctx.lineTo(0,7); ctx.lineTo(-5,0); ctx.closePath(); ctx.fill();
-  ctx.fillStyle = '#7ddb2a'; // left facet
-  ctx.beginPath(); ctx.moveTo(0,-6); ctx.lineTo(0,6); ctx.lineTo(-4,0); ctx.closePath(); ctx.fill();
-  ctx.fillStyle = '#aef55a'; // right facet (brighter)
-  ctx.beginPath(); ctx.moveTo(0,-6); ctx.lineTo(4,0); ctx.lineTo(0,6); ctx.closePath(); ctx.fill();
-  // sparkle
-  ctx.fillStyle = '#eaffc0'; ctx.fillRect(-1, -3, 2, 2);
+  ctx.globalAlpha = 0.25 + pulse * 0.25; ctx.fillStyle = st.glow;
+  ctx.beginPath(); ctx.arc(x, cy, 15 + pulse * 3, 0, Math.PI*2); ctx.fill();
   ctx.restore();
+  const spr = powerupSprite(type);
+  ctx.drawImage(spr, x - spr.width/2, cy - spr.height/2);
 }
 
-// Survival special pickup (chicken heal / magnet vacuum / bomb nuke)
+// XP gem dropped by monsters (cached faceted crystal + cheap live glow)
+function gemSprite() {
+  return sprite('gem', 18, 18, (c) => {
+    c.fillStyle = '#2f6e10'; c.beginPath(); c.moveTo(0,-7); c.lineTo(5,0); c.lineTo(0,7); c.lineTo(-5,0); c.closePath(); c.fill();
+    c.fillStyle = '#7ddb2a'; c.beginPath(); c.moveTo(0,-6); c.lineTo(0,6); c.lineTo(-4,0); c.closePath(); c.fill();
+    c.fillStyle = '#aef55a'; c.beginPath(); c.moveTo(0,-6); c.lineTo(4,0); c.lineTo(0,6); c.closePath(); c.fill();
+    c.fillStyle = '#eaffc0'; c.fillRect(-1,-3,2,2);
+  });
+}
+function drawGem(ctx, x, y) {
+  const pulse = 0.6 + 0.4 * Math.sin(Date.now()*0.004 + (x + y) * 0.05);
+  ctx.save();
+  ctx.globalAlpha = 0.3 + pulse * 0.25; ctx.fillStyle = '#9ef542';
+  ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI*2); ctx.fill();
+  ctx.restore();
+  const spr = gemSprite();
+  ctx.drawImage(spr, x - spr.width/2, y - spr.height/2);
+}
+
+// Survival special pickup — cached token+icon per type, cheap live shadow/glow.
+function survItemSprite(type) {
+  return sprite('item_' + type, 30, 30, (c) => {
+    const col = type === 'chicken' ? '#ffcf6a' : (type === 'magnet' ? '#ff5566' : (type === 'clock' ? '#6ad0ff' : '#ffae20'));
+    c.fillStyle = '#11131c'; c.beginPath(); c.arc(0, 0, 13, 0, Math.PI*2); c.fill();
+    c.fillStyle = col; c.beginPath(); c.arc(0, 0, 11, 0, Math.PI*2); c.fill();
+    c.fillStyle = '#10141c'; c.lineWidth = 2.4; c.strokeStyle = '#10141c'; c.lineCap = 'round';
+    if (type === 'chicken') {
+      c.beginPath(); c.arc(-2, -1, 5, 0, Math.PI*2); c.fill();
+      c.beginPath(); c.moveTo(1, 1); c.lineTo(6, 6); c.stroke();
+    } else if (type === 'magnet') {
+      c.lineWidth = 3; c.beginPath(); c.arc(0, -1, 5, Math.PI, 0); c.stroke();
+      c.beginPath(); c.moveTo(-5, -1); c.lineTo(-5, 5); c.stroke();
+      c.beginPath(); c.moveTo(5, -1); c.lineTo(5, 5); c.stroke();
+    } else if (type === 'clock') {
+      c.lineWidth = 2; c.beginPath(); c.arc(0, 0, 6, 0, Math.PI*2); c.stroke();
+      c.beginPath(); c.moveTo(0, 0); c.lineTo(0, -4); c.stroke();
+      c.beginPath(); c.moveTo(0, 0); c.lineTo(3, 1); c.stroke();
+    } else {
+      c.beginPath(); c.arc(0, 1, 5, 0, Math.PI*2); c.fill();
+      c.beginPath(); c.moveTo(3, -3); c.lineTo(6, -6); c.stroke();
+    }
+  });
+}
 function drawSurvItem(ctx, x, y, type) {
   const bob = Math.sin(Date.now()/300) * 2;
   const pulse = 0.5 + 0.5*Math.sin(Date.now()/180);
   const cy = y + bob;
-  ctx.save();
+  const col = type === 'chicken' ? '#ffcf6a' : (type === 'magnet' ? '#ff5566' : (type === 'clock' ? '#6ad0ff' : '#ffae20'));
   ctx.fillStyle = 'rgba(0,0,0,0.35)';
   ctx.beginPath(); ctx.ellipse(x, y+12, 12, 4, 0, 0, Math.PI*2); ctx.fill();
-  const col = type === 'chicken' ? '#ffcf6a' : (type === 'magnet' ? '#ff5566' : (type === 'clock' ? '#6ad0ff' : '#ffae20'));
+  ctx.save();
   ctx.globalAlpha = 0.25 + pulse*0.25; ctx.fillStyle = col;
   ctx.beginPath(); ctx.arc(x, cy, 16 + pulse*3, 0, Math.PI*2); ctx.fill();
-  ctx.globalAlpha = 1;
-  ctx.fillStyle = '#11131c'; ctx.beginPath(); ctx.arc(x, cy, 13, 0, Math.PI*2); ctx.fill();
-  ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x, cy, 11, 0, Math.PI*2); ctx.fill();
-  ctx.fillStyle = '#10141c'; ctx.lineWidth = 2.4; ctx.strokeStyle = '#10141c'; ctx.lineCap = 'round';
-  if (type === 'chicken') {
-    // drumstick: bone + meat
-    ctx.beginPath(); ctx.arc(x-2, cy-1, 5, 0, Math.PI*2); ctx.fill();
-    ctx.beginPath(); ctx.moveTo(x+1, cy+1); ctx.lineTo(x+6, cy+6); ctx.stroke();
-  } else if (type === 'magnet') {
-    // horseshoe magnet
-    ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x, cy-1, 5, Math.PI, 0); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(x-5, cy-1); ctx.lineTo(x-5, cy+5); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(x+5, cy-1); ctx.lineTo(x+5, cy+5); ctx.stroke();
-  } else if (type === 'clock') {
-    // clock face + hands
-    ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, cy, 6, 0, Math.PI*2); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(x, cy); ctx.lineTo(x, cy-4); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(x, cy); ctx.lineTo(x+3, cy+1); ctx.stroke();
-  } else {
-    // bomb: circle + fuse
-    ctx.beginPath(); ctx.arc(x, cy+1, 5, 0, Math.PI*2); ctx.fill();
-    ctx.beginPath(); ctx.moveTo(x+3, cy-3); ctx.lineTo(x+6, cy-6); ctx.stroke();
-  }
   ctx.restore();
+  const spr = survItemSprite(type);
+  ctx.drawImage(spr, x - spr.width/2, cy - spr.height/2);
 }
 
-// Breakable wooden crate (shows damage as it's shot)
+// Breakable wooden crate — cached box per damage stage, cheap shadow live.
+function crateSprite(stage) {
+  return sprite('crate_' + stage, 36, 36, (c) => {
+    const s = 14;
+    c.fillStyle = '#3a2410'; c.fillRect(-s, -s, s*2, s*2);
+    c.fillStyle = '#8a5a2a'; c.fillRect(-s+2, -s+2, s*2-4, s*2-4);
+    c.strokeStyle = '#5a3818'; c.lineWidth = 2; c.strokeRect(-s+2, -s+2, s*2-4, s*2-4);
+    c.beginPath(); c.moveTo(-s+2, -s+2); c.lineTo(s-2, s-2); c.stroke();
+    c.beginPath(); c.moveTo(s-2, -s+2); c.lineTo(-s+2, s-2); c.stroke();
+    if (stage >= 1) { c.strokeStyle = '#2a1808'; c.lineWidth = 1.5;
+      c.beginPath(); c.moveTo(-4, -s+2); c.lineTo(-1, 0); c.lineTo(-5, s-2); c.stroke(); }
+    if (stage >= 2) {
+      c.beginPath(); c.moveTo(s-2, -3); c.lineTo(2, 1); c.lineTo(s-2, 6); c.stroke(); }
+  });
+}
 function drawCrate(ctx, x, y, frac) {
-  ctx.save();
   ctx.fillStyle = 'rgba(0,0,0,0.3)';
   ctx.beginPath(); ctx.ellipse(x, y+13, 14, 4, 0, 0, Math.PI*2); ctx.fill();
-  const s = 14;
-  ctx.fillStyle = '#3a2410'; ctx.fillRect(x-s, y-s, s*2, s*2);
-  ctx.fillStyle = '#8a5a2a'; ctx.fillRect(x-s+2, y-s+2, s*2-4, s*2-4);
-  ctx.strokeStyle = '#5a3818'; ctx.lineWidth = 2;
-  ctx.strokeRect(x-s+2, y-s+2, s*2-4, s*2-4);
-  // diagonal planks
-  ctx.beginPath(); ctx.moveTo(x-s+2, y-s+2); ctx.lineTo(x+s-2, y+s-2); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(x+s-2, y-s+2); ctx.lineTo(x-s+2, y+s-2); ctx.stroke();
-  // cracks as it takes damage
-  if (frac < 0.66) { ctx.strokeStyle = '#2a1808'; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(x-4, y-s+2); ctx.lineTo(x-1, y); ctx.lineTo(x-5, y+s-2); ctx.stroke(); }
-  if (frac < 0.34) {
-    ctx.beginPath(); ctx.moveTo(x+s-2, y-3); ctx.lineTo(x+2, y+1); ctx.lineTo(x+s-2, y+6); ctx.stroke(); }
-  ctx.restore();
+  const stage = frac < 0.34 ? 2 : (frac < 0.66 ? 1 : 0);
+  const spr = crateSprite(stage);
+  ctx.drawImage(spr, x - spr.width/2, y - spr.height/2);
 }
 
 // Pre-rendered zombie body sprite cache (huge perf win with big swarms):

@@ -108,9 +108,9 @@ const C = {
   // Survival mode (Vampire-Survivors-like co-op vs endless monster waves)
   SURV_MAP_W:           3600,   // survival uses a MUCH bigger arena
   SURV_MAP_H:           2700,
-  SURV_SPAWN_START_MS:  1400,   // initial gap between spawn batches
-  SURV_SPAWN_MIN_MS:    560,    // fastest spawn gap
-  SURV_MAX_MONSTERS:    85,     // hard cap on living zombies
+  SURV_SPAWN_START_MS:  1300,   // initial gap between spawn batches
+  SURV_SPAWN_MIN_MS:    380,    // fastest spawn gap
+  SURV_MAX_MONSTERS:    140,    // hard cap on living zombies
   SURV_MON_SPEED:       1.6,
   SURV_MON_HP:          3,
   SURV_MON_DMG:         1,
@@ -751,8 +751,8 @@ function survDifficulty(room, now) {
     // Cap speed below the player's so they always stay kiteable.
     speed: C.SURV_MON_SPEED + Math.min(1.4, mins * 0.08),
     dmg:   C.SURV_MON_DMG + Math.floor(mins / 4),
-    interval: Math.max(C.SURV_SPAWN_MIN_MS, C.SURV_SPAWN_START_MS - mins * 70),
-    batch: 1 + Math.floor(mins / 4),
+    interval: Math.max(C.SURV_SPAWN_MIN_MS, C.SURV_SPAWN_START_MS - mins * 85),
+    batch: 2 + Math.floor(mins / 2.5),
   };
 }
 
