@@ -1896,10 +1896,10 @@ function getMonsterSprite(tier, r) {
   // belly
   c.globalAlpha = 0.22; c.fillStyle = pal.light;
   c.beginPath(); c.ellipse(0, r*0.28, r*0.5, r*0.4, 0, 0, Math.PI*2); c.fill(); c.globalAlpha = 1;
-  // rot patches
+  // rot patches (kept low on the body so they never sit under an eye)
   c.fillStyle = pal.dark;
-  c.beginPath(); c.arc(-r*0.4, r*0.28, r*0.16, 0, Math.PI*2); c.fill();
-  c.beginPath(); c.arc(r*0.44, -r*0.02, r*0.11, 0, Math.PI*2); c.fill();
+  c.beginPath(); c.arc(-r*0.42, r*0.4, r*0.15, 0, Math.PI*2); c.fill();
+  c.beginPath(); c.arc(r*0.46, r*0.46, r*0.1, 0, Math.PI*2); c.fill();
   // angry brows
   c.strokeStyle = '#160a0a'; c.lineWidth = Math.max(1.6, r*0.13);
   c.beginPath(); c.moveTo(-r*0.62, -r*0.42); c.lineTo(-r*0.2, -r*0.26); c.stroke();
