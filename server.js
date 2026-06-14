@@ -1855,9 +1855,25 @@ function tick(room) {
         // Boss: at close range, punch (knockback) or grab-and-throw the player.
         if (mo.boss && bestD < C.BOSS_PUNCH_RANGE*C.BOSS_PUNCH_RANGE && now >= (mo.punchAt||0) && !target.throwState) {
           mo.punchAt = now + C.BOSS_PUNCH_CD;
-          if (now >= (target.iframeUntil || 0)) {
-            const ang = Math.atan2(target.y-mo.y, target.x-mo.x);
+          const ang = Math.atan2(target.y-mo.y, target.x-mo.x);
+          // Rare special: grab a neighbouring zombie and hurl it at the player.
+          const neighbours = [];
+          for (const z of room.monsters) {
+            if (z !== mo && !z.boss && (z.x-mo.x)**2 + (z.y-mo.y)**2 < 160*160) neighbours.push(z);
+          }
+          if (neighbours.length && Math.random() < 0.12) {
+            const z = neighbours[Math.floor(Math.random()*neighbours.length)];
+            const zi = room.monsters.indexOf(z); if (zi >= 0) room.monsters.splice(zi, 1);
+            room.bullets.push({
+              id: room.nextBulletId++, owner: null, enemy: true, type: 'zthrow', dmg: mo.dmg + 1,
+              x: mo.x + Math.cos(ang)*mo.r, y: mo.y + Math.sin(ang)*mo.r,
+              vx: Math.cos(ang)*9, vy: Math.sin(ang)*9, angle: ang, life: 100, rExtra: 8,
+            });
+            mo.attackType = 'throw'; mo.attackAt = now; mo.atkAng = ang;
+            io.to(room.code).emit('bossThrow', { x: Math.round(mo.x), y: Math.round(mo.y), zombie: true });
+          } else if (now >= (target.iframeUntil || 0)) {
             const isThrow = ((mo.punchCount = (mo.punchCount||0)+1) % 2) === 0;
+            mo.attackType = isThrow ? 'throw' : 'punch'; mo.attackAt = now; mo.atkAng = ang;
             applyDamage(room, target, mo.dmg * (isThrow ? 2 : 1), null);
             const MW = room.mapW || C.MAP_W, MH = room.mapH || C.MAP_H;
             if (isThrow) {
@@ -2222,7 +2238,8 @@ function tick(room) {
       rocketPickups: room.rocketPickups.map(r=>({x:r.x, y:r.y})),
       sodas:   room.sodas.map(s=>({x:s.x, y:s.y})),
       powerups: room.powerups.map(pu=>({x:pu.x, y:pu.y, type:pu.type})),
-      monsters: room.monsters.map(m=>({id:m.id, x:m.x, y:m.y, hp:m.hp, maxHp:m.maxHp, r:m.r, elite:m.elite, boss:m.boss, acid:m.acid})),
+      monsters: room.monsters.map(m=>({id:m.id, x:m.x, y:m.y, hp:m.hp, maxHp:m.maxHp, r:m.r, elite:m.elite, boss:m.boss, acid:m.acid,
+        atk: (m.boss && m.attackType && now - m.attackAt < 700) ? {t: now - m.attackAt, type: m.attackType, a: m.atkAng} : 0})),
       gems: room.gems.map(g=>({x:g.x, y:g.y, val:g.val})),
       survItems: room.survItems.map(it=>({x:it.x, y:it.y, type:it.type})),
       crates: room.crates.map(cr=>({x:cr.x, y:cr.y, hp:cr.hp, maxHp:cr.maxHp})),

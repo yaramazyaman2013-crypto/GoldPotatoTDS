@@ -1411,8 +1411,22 @@ function bossHitFx(big) {
   shakeMag = big ? 11 : 5;
   bossAnim = { type: big ? 'throw' : 'punch', t: Date.now() };
 }
-socket.on('bossPunch', () => bossHitFx(false));
-socket.on('bossThrow', () => bossHitFx(true));
+const impacts = [];
+function addImpact(x, y, big) { impacts.push({ x, y, t: Date.now(), big }); if (impacts.length > 24) impacts.shift(); }
+function drawImpacts() {
+  const now = Date.now();
+  for (let i = impacts.length-1; i >= 0; i--) {
+    const im = impacts[i]; const age = now - im.t; const dur = im.big ? 450 : 280;
+    if (age > dur) { impacts.splice(i, 1); continue; }
+    const k = age/dur, a = 1 - k;
+    const rr = (im.big ? 80 : 48) * k;
+    gctx.strokeStyle = im.big ? `rgba(200,120,255,${a})` : `rgba(255,220,150,${a})`;
+    gctx.lineWidth = (im.big ? 6 : 3.5) * (1 - k*0.5);
+    gctx.beginPath(); gctx.arc(im.x-camX, im.y-camY, rr, 0, Math.PI*2); gctx.stroke();
+  }
+}
+socket.on('bossPunch', (d) => { bossHitFx(false); if (d) addImpact(d.x, d.y, false); });
+socket.on('bossThrow', (d) => { bossHitFx(true); if (d) addImpact(d.x, d.y, true); });
 
 // Survival: whip slash visual effect.
 const whips = [];
@@ -1951,18 +1965,28 @@ function drawMonster(ctx, x, y, m) {
   // animated arms (boss has two longer reaching arms with fists)
   const skinD = (MON_PAL[tier] || MON_PAL.normal).dark;
   if (m.boss) {
-    const now2 = Date.now();
-    const dur = bossAnim.type === 'throw' ? 750 : 280;
-    const punchT = bossAnim.type && (now2 - bossAnim.t) < dur ? 1 - (now2 - bossAnim.t)/dur : 0;
-    const ang = Math.atan2(_mePos.y - m.y, _mePos.x - m.x); // boss -> player
-    ctx.strokeStyle = skinD; ctx.lineWidth = Math.max(4, r*0.34); ctx.lineCap = 'round';
+    // server-synced attack: clear wind-up then a big thrust toward the player
+    const atk = m.atk;
+    let phase = 0, ang = Math.atan2(_mePos.y - m.y, _mePos.x - m.x);
+    if (atk) {
+      ang = atk.a; const t = atk.t;
+      if (atk.type === 'punch') {
+        if (t < 90) phase = -(t/90)*0.6;                       // wind back
+        else if (t < 185) phase = (t-90)/95;                    // snap forward
+        else phase = Math.max(0, 1-(t-185)/110);                // retract
+      } else { // throw / zombie-hurl
+        if (t < 200) phase = -(t/200)*0.6;                      // rear back
+        else if (t < 360) phase = (t-200)/160 * 0.7;            // raise/hold
+        else phase = 0.7 + Math.sin(Math.min(1,(t-360)/300)*Math.PI)*0.9; // hurl
+      }
+    }
+    ctx.strokeStyle = skinD; ctx.lineWidth = Math.max(4, r*0.36); ctx.lineCap = 'round';
     ctx.fillStyle = '#7b46c8';
     for (const side of [-1, 1]) {
       let hx, hy;
-      if (punchT > 0) {
-        // thrust both arms toward the player (punch / grab)
-        const reach = r*1.4 + punchT * r*2.0;
-        const perp = side * r*0.45 * (1 - punchT);
+      if (atk) {
+        const reach = r*1.2 + phase * r*2.4;
+        const perp = side * r*0.5 * Math.max(0, 1 - Math.abs(phase));
         hx = x + Math.cos(ang)*reach + Math.cos(ang+Math.PI/2)*perp;
         hy = cy + Math.sin(ang)*reach + Math.sin(ang+Math.PI/2)*perp;
       } else {
@@ -1970,7 +1994,7 @@ function drawMonster(ctx, x, y, m) {
         hy = cy + r*0.7 - side*lurch*5;
       }
       ctx.beginPath(); ctx.moveTo(x + side*r*0.5, cy); ctx.lineTo(x + side*r*0.95, cy); ctx.lineTo(hx, hy); ctx.stroke();
-      ctx.beginPath(); ctx.arc(hx, hy, r*0.36, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(hx, hy, r*0.4, 0, Math.PI*2); ctx.fill();
     }
   } else {
     ctx.strokeStyle = skinD; ctx.lineWidth = Math.max(3, r*0.32); ctx.lineCap = 'round';
@@ -2470,6 +2494,16 @@ function render() {
       gctx.save(); gctx.translate(x, y); gctx.rotate(Date.now()/120);
       gctx.fillStyle = '#ffd24a'; gctx.fillRect(-2, -8, 4, 16); gctx.fillRect(-8, -2, 16, 4);
       gctx.restore();
+    } else if (b.type === 'zthrow') {
+      // a whole zombie hurled at you — tumbling
+      gctx.save(); gctx.translate(x, y); gctx.rotate(Date.now()/90);
+      gctx.fillStyle = '#34501f'; gctx.beginPath(); gctx.arc(0, 0, 11, 0, Math.PI*2); gctx.fill();
+      gctx.fillStyle = '#6e9a45'; gctx.beginPath(); gctx.arc(0, 0, 9, 0, Math.PI*2); gctx.fill();
+      gctx.strokeStyle = '#34501f'; gctx.lineWidth = 3; gctx.lineCap = 'round';
+      gctx.beginPath(); gctx.moveTo(-6, 6); gctx.lineTo(-11, 11); gctx.stroke();
+      gctx.beginPath(); gctx.moveTo(6, 6); gctx.lineTo(11, 11); gctx.stroke();
+      gctx.fillStyle = '#ff3a2a'; gctx.fillRect(-4, -3, 2.5, 2.5); gctx.fillRect(2, -3, 2.5, 2.5);
+      gctx.restore();
     } else if (b.type === 'acid') {
       // Toxic purple goo blob — deliberately NOT green so it can't be mistaken
       // for XP crystals. Bubbling glob with a dripping trail.
@@ -2498,6 +2532,7 @@ function render() {
   drawExplosions();
   drawZaps();
   drawWhips();
+  drawImpacts();
   if (Date.now() < freezeUntil) { gctx.fillStyle = 'rgba(120,200,255,0.13)'; gctx.fillRect(0, 0, W, H); }
   drawKnifeFx();
 
