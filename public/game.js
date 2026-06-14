@@ -1841,45 +1841,90 @@ function drawCrate(ctx, x, y, frac) {
   ctx.drawImage(spr, x - spr.width/2, y - spr.height/2);
 }
 
-// Pre-rendered zombie body sprite cache (huge perf win with big swarms):
-// the static body/head/eyes/mouth/crown is baked once per tier+size, then the
-// render loop just drawImage()s it and adds cheap animated arms + hp bar.
-const monsterSprites = new Map(); // key `${tier}|${r}` -> canvas
+// Zombie palettes per tier (base/dark/light/rim/eye glow).
+const MON_PAL = {
+  normal: { base:'#6e9a45', dark:'#34501f', light:'#aee06a', rim:'#d4f59a', eye:'#ff3a2a' },
+  elite:  { base:'#c63a48', dark:'#5f121b', light:'#ec8b95', rim:'#ffbcc3', eye:'#ffe24a' },
+  acid:   { base:'#a6c33a', dark:'#566e14', light:'#dff06a', rim:'#f0ff9a', eye:'#caff3a' },
+  boss:   { base:'#9b59ff', dark:'#411d85', light:'#cdb0ff', rim:'#ece0ff', eye:'#ffe24a' },
+};
+// Pre-rendered DETAILED zombie sprite cache: shaded gradient body, rim light,
+// sunken glowing eyes, angry brow, toothed maw, rot patches, back-spikes/crown
+// per tier. Baked once per tier+size (cheap), so swarms stay smooth.
+const monsterSprites = new Map();
 function getMonsterSprite(tier, r) {
   const key = tier + '|' + r;
   if (monsterSprites.has(key)) return monsterSprites.get(key);
-  const skin  = tier==='boss' ? '#9b59ff' : (tier==='elite' ? '#c63a48' : (tier==='acid' ? '#a6c33a' : '#6e9a45'));
-  const skinD = tier==='boss' ? '#5a2bb0' : (tier==='elite' ? '#7e1c26' : (tier==='acid' ? '#5f7a16' : '#456a2a'));
-  const skinL = tier==='boss' ? '#c9a6ff' : (tier==='elite' ? '#e3737d' : (tier==='acid' ? '#d9f06a' : '#9bc46a'));
-  const eyeC  = (tier==='elite'||tier==='boss') ? '#ffe24a' : (tier==='acid' ? '#caff3a' : '#ff3a2a');
-  const pad = 18;
+  const pal = MON_PAL[tier] || MON_PAL.normal;
+  const pad = 24;
   const cv = document.createElement('canvas');
   cv.width = cv.height = (r + pad) * 2;
   const c = cv.getContext('2d');
   c.translate(cv.width/2, cv.height/2);
-  // body
-  c.fillStyle = skinD; c.beginPath(); c.arc(0, 1, r, 0, Math.PI*2); c.fill();
-  c.fillStyle = skin;  c.beginPath(); c.arc(0, 0, r - 2, 0, Math.PI*2); c.fill();
-  c.fillStyle = skinD;
-  c.beginPath(); c.arc(-r*0.35, r*0.3, r*0.18, 0, Math.PI*2); c.fill();
-  c.beginPath(); c.arc( r*0.4, -r*0.1, r*0.14, 0, Math.PI*2); c.fill();
-  c.fillStyle = skinL;
-  c.beginPath(); c.arc(-r*0.25, -r*0.45, r*0.28, 0, Math.PI*2); c.fill();
-  const ew = Math.max(2.2, r*0.24), ey = -r*0.22;
-  c.fillStyle = 'rgba(0,0,0,0.5)';
-  c.fillRect(-r*0.46-1, ey-1, ew+2, ew+2); c.fillRect(r*0.46-ew-1, ey-1, ew+2, ew+2);
-  c.fillStyle = eyeC;
-  c.fillRect(-r*0.46, ey, ew, ew); c.fillRect(r*0.46-ew, ey, ew, ew);
-  c.strokeStyle = '#1a0a0a'; c.lineWidth = Math.max(1.4, r*0.12);
+  c.lineJoin = 'round'; c.lineCap = 'round';
+  // back spikes (elite/boss)
+  if (tier === 'elite' || tier === 'boss') {
+    c.fillStyle = pal.dark;
+    for (let a = -2; a <= 2; a++) {
+      const ang = -Math.PI/2 + a*0.5, sx = Math.cos(ang)*r*0.95, sy = Math.sin(ang)*r*0.95;
+      c.beginPath(); c.moveTo(sx-3, sy); c.lineTo(sx+Math.cos(ang)*9, sy+Math.sin(ang)*9); c.lineTo(sx+3, sy); c.closePath(); c.fill();
+    }
+  }
+  // dark outline
+  c.fillStyle = pal.dark; c.beginPath(); c.arc(0, 1, r, 0, Math.PI*2); c.fill();
+  // shaded body
+  const g = c.createRadialGradient(-r*0.35, -r*0.4, r*0.1, 0, 0, r*1.05);
+  g.addColorStop(0, pal.light); g.addColorStop(0.55, pal.base); g.addColorStop(1, pal.dark);
+  c.fillStyle = g; c.beginPath(); c.arc(0, 0, r-1.5, 0, Math.PI*2); c.fill();
+  // rim light (upper-left)
+  c.globalAlpha = 0.5; c.strokeStyle = pal.rim; c.lineWidth = Math.max(1.5, r*0.12);
+  c.beginPath(); c.arc(0, 0, r-2.5, Math.PI*1.02, Math.PI*1.58); c.stroke(); c.globalAlpha = 1;
+  // belly
+  c.globalAlpha = 0.22; c.fillStyle = pal.light;
+  c.beginPath(); c.ellipse(0, r*0.28, r*0.5, r*0.4, 0, 0, Math.PI*2); c.fill(); c.globalAlpha = 1;
+  // rot patches
+  c.fillStyle = pal.dark;
+  c.beginPath(); c.arc(-r*0.4, r*0.28, r*0.16, 0, Math.PI*2); c.fill();
+  c.beginPath(); c.arc(r*0.44, -r*0.02, r*0.11, 0, Math.PI*2); c.fill();
+  // angry brows
+  c.strokeStyle = '#160a0a'; c.lineWidth = Math.max(1.6, r*0.13);
+  c.beginPath(); c.moveTo(-r*0.62, -r*0.42); c.lineTo(-r*0.2, -r*0.26); c.stroke();
+  c.beginPath(); c.moveTo(r*0.62, -r*0.42); c.lineTo(r*0.2, -r*0.26); c.stroke();
+  // sunken eye sockets
+  c.fillStyle = 'rgba(0,0,0,0.55)';
+  c.beginPath(); c.ellipse(-r*0.4, -r*0.1, r*0.23, r*0.27, 0, 0, Math.PI*2); c.fill();
+  c.beginPath(); c.ellipse(r*0.4, -r*0.1, r*0.23, r*0.27, 0, 0, Math.PI*2); c.fill();
+  // glowing pupils + glint
+  c.fillStyle = pal.eye;
+  c.beginPath(); c.arc(-r*0.4, -r*0.08, r*0.11, 0, Math.PI*2); c.fill();
+  c.beginPath(); c.arc(r*0.4, -r*0.08, r*0.11, 0, Math.PI*2); c.fill();
+  c.fillStyle = '#fff';
+  c.beginPath(); c.arc(-r*0.44, -r*0.12, r*0.04, 0, Math.PI*2); c.fill();
+  c.beginPath(); c.arc(r*0.36, -r*0.12, r*0.04, 0, Math.PI*2); c.fill();
+  // toothed maw
+  c.fillStyle = '#160404';
   c.beginPath();
-  c.moveTo(-r*0.4, r*0.42); c.lineTo(-r*0.13, r*0.28); c.lineTo(0, r*0.46);
-  c.lineTo(r*0.13, r*0.28); c.lineTo(r*0.4, r*0.42); c.stroke();
-  if (tier==='boss') {
-    c.fillStyle = '#ffd24a';
+  c.moveTo(-r*0.42, r*0.36); c.quadraticCurveTo(0, r*0.7, r*0.42, r*0.36);
+  c.quadraticCurveTo(0, r*0.5, -r*0.42, r*0.36); c.fill();
+  c.fillStyle = '#ece4d2';
+  const teeth = 4;
+  for (let i = 0; i < teeth; i++) {
+    const tx = -r*0.3 + i*(r*0.6/(teeth-1));
+    c.beginPath(); c.moveTo(tx-2, r*0.4); c.lineTo(tx, r*0.5); c.lineTo(tx+2, r*0.4); c.closePath(); c.fill();
+  }
+  // acid drool
+  if (tier === 'acid') {
+    c.fillStyle = '#c64bdf';
+    c.beginPath(); c.ellipse(r*0.1, r*0.62, r*0.08, r*0.16, 0, 0, Math.PI*2); c.fill();
+  }
+  // boss crown
+  if (tier === 'boss') {
+    c.fillStyle = '#ffd24a'; c.strokeStyle = '#b8860b'; c.lineWidth = 1;
     c.beginPath();
-    c.moveTo(-r*0.6, -r*0.62); c.lineTo(-r*0.6, -r*1.02); c.lineTo(-r*0.2, -r*0.72);
-    c.lineTo(0, -r*1.08); c.lineTo(r*0.2, -r*0.72); c.lineTo(r*0.6, -r*1.02);
-    c.lineTo(r*0.6, -r*0.62); c.closePath(); c.fill();
+    c.moveTo(-r*0.6, -r*0.66); c.lineTo(-r*0.6, -r*1.05); c.lineTo(-r*0.22, -r*0.78);
+    c.lineTo(0, -r*1.12); c.lineTo(r*0.22, -r*0.78); c.lineTo(r*0.6, -r*1.05);
+    c.lineTo(r*0.6, -r*0.66); c.closePath(); c.fill(); c.stroke();
+    c.fillStyle = '#ff4654'; c.beginPath(); c.arc(0, -r*0.82, r*0.09, 0, Math.PI*2); c.fill();
   }
   monsterSprites.set(key, cv);
   return cv;
@@ -1904,7 +1949,7 @@ function drawMonster(ctx, x, y, m) {
     ctx.beginPath(); ctx.arc(x, cy, r+12, 0, Math.PI*2); ctx.fill();
   }
   // animated arms (boss has two longer reaching arms with fists)
-  const skinD = tier==='boss' ? '#5a2bb0' : (tier==='elite' ? '#7e1c26' : (tier==='acid' ? '#5f7a16' : '#456a2a'));
+  const skinD = (MON_PAL[tier] || MON_PAL.normal).dark;
   if (m.boss) {
     const now2 = Date.now();
     const dur = bossAnim.type === 'throw' ? 750 : 280;
@@ -1929,8 +1974,17 @@ function drawMonster(ctx, x, y, m) {
     }
   } else {
     ctx.strokeStyle = skinD; ctx.lineWidth = Math.max(3, r*0.32); ctx.lineCap = 'round';
-    ctx.beginPath(); ctx.moveTo(x-r*0.5, cy); ctx.lineTo(x-r*0.95, cy + r*0.55 + lurch*2); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(x+r*0.5, cy); ctx.lineTo(x+r*0.95, cy + r*0.55 - lurch*2); ctx.stroke();
+    const lhx = x-r*0.95, lhy = cy + r*0.55 + lurch*2;
+    const rhx = x+r*0.95, rhy = cy + r*0.55 - lurch*2;
+    ctx.beginPath(); ctx.moveTo(x-r*0.5, cy); ctx.lineTo(lhx, lhy); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x+r*0.5, cy); ctx.lineTo(rhx, rhy); ctx.stroke();
+    // little claws at the hands
+    ctx.fillStyle = '#160a0a';
+    for (const [hx, hy] of [[lhx, lhy], [rhx, rhy]]) {
+      for (let cl = -1; cl <= 1; cl++) {
+        ctx.beginPath(); ctx.moveTo(hx + cl*2.2, hy); ctx.lineTo(hx + cl*2.2 - 0.8, hy + 4.5); ctx.lineTo(hx + cl*2.2 + 1.4, hy + 0.5); ctx.closePath(); ctx.fill();
+      }
+    }
   }
   // baked body
   const spr = getMonsterSprite(tier, r);
@@ -2417,10 +2471,25 @@ function render() {
       gctx.fillStyle = '#ffd24a'; gctx.fillRect(-2, -8, 4, 16); gctx.fillRect(-8, -2, 16, 4);
       gctx.restore();
     } else if (b.type === 'acid') {
-      const ap = 0.5 + 0.5*Math.sin(Date.now()/90);
-      gctx.fillStyle = `rgba(150,220,40,${0.4+ap*0.25})`; gctx.beginPath(); gctx.arc(x, y, 7+ap*1.5, 0, Math.PI*2); gctx.fill();
-      gctx.fillStyle = '#cfff5a'; gctx.beginPath(); gctx.arc(x, y, 3.5, 0, Math.PI*2); gctx.fill();
-      gctx.fillStyle = '#5f7a16'; gctx.fillRect(x-1, y-1, 2, 2);
+      // Toxic purple goo blob — deliberately NOT green so it can't be mistaken
+      // for XP crystals. Bubbling glob with a dripping trail.
+      const ap = 0.5 + 0.5*Math.sin(Date.now()/70);
+      // drip trail behind the direction of travel
+      const ta = (b.angle || 0) + Math.PI;
+      for (let k = 1; k <= 3; k++) {
+        gctx.fillStyle = `rgba(170,40,200,${0.30 - k*0.07})`;
+        gctx.beginPath(); gctx.arc(x + Math.cos(ta)*k*5, y + Math.sin(ta)*k*5, 4 - k*0.7, 0, Math.PI*2); gctx.fill();
+      }
+      // outer glow
+      gctx.fillStyle = `rgba(210,80,240,${0.35+ap*0.2})`;
+      gctx.beginPath(); gctx.arc(x, y, 9+ap*1.5, 0, Math.PI*2); gctx.fill();
+      // body + dark rim
+      gctx.fillStyle = '#7a1d8f'; gctx.beginPath(); gctx.arc(x, y, 7, 0, Math.PI*2); gctx.fill();
+      gctx.fillStyle = '#c64bdf'; gctx.beginPath(); gctx.arc(x, y, 5.5, 0, Math.PI*2); gctx.fill();
+      // bubbles
+      gctx.fillStyle = '#f0b0ff';
+      gctx.beginPath(); gctx.arc(x-2, y-2, 1.6, 0, Math.PI*2); gctx.fill();
+      gctx.beginPath(); gctx.arc(x+2.5, y+1, 1.1, 0, Math.PI*2); gctx.fill();
     } else {
       gctx.fillStyle='#000'; gctx.fillRect(x-3,y-3,6,6);
       gctx.fillStyle='#ffd24a'; gctx.fillRect(x-2,y-2,4,4);
