@@ -109,12 +109,13 @@ const C = {
   SURV_MAP_W:           3600,   // survival uses a MUCH bigger arena
   SURV_MAP_H:           2700,
   SURV_SPAWN_START_MS:  1400,   // initial gap between spawn batches
-  SURV_SPAWN_MIN_MS:    420,    // fastest spawn gap
-  SURV_MAX_MONSTERS:    110,    // hard cap on living zombies
+  SURV_SPAWN_MIN_MS:    560,    // fastest spawn gap
+  SURV_MAX_MONSTERS:    85,     // hard cap on living zombies
   SURV_MON_SPEED:       1.6,
   SURV_MON_HP:          3,
   SURV_MON_DMG:         1,
   SURV_MON_CONTACT_CD:  650,    // ms between contact hits from one monster
+  SURV_HURT_IFRAME_MS:  320,    // player invuln window after any contact hit
   SURV_MON_R:           12,
   SURV_MON_XP:          1,
   SURV_GEM_MAGNET_R:    190,    // auto-collect radius
@@ -507,9 +508,9 @@ function addPlayer(room, id, name, color, cls) {
     pCrit: 0, pCritMul: 2, pBigBullet: 0, pExplode: 0, pKnock: 0,
     pArmor: 0, pArea: 1, pDuration: 1, pLuck: 0, pCurse: 0, pRevive: 0,
     wAura: 0, wOrbit: 0, wLightning: 0, wMissile: 0,
-    wWand: 0, wKnife: 0, wAxe: 0, wFire: 0, wHoly: 0, wCross: 0,
+    wWand: 0, wKnife: 0, wAxe: 0, wFire: 0, wHoly: 0, wCross: 0, wWhip: 0,
     auraAt: 0, lightningAt: 0, missileAt: 0, orbitAngle: 0, auraR: 0, orbs: null,
-    wandAt: 0, knifeAt: 0, axeAt: 0, fireAt: 0, holyAt: 0, crossAt: 0,
+    wandAt: 0, knifeAt: 0, axeAt: 0, fireAt: 0, holyAt: 0, crossAt: 0, whipAt: 0, iframeUntil: 0,
     // Imposter mode
     role: 'crew', tasks: [], killReadyAt: 0, emergencyUsed: 0,
     vented: false, ventGroup: null, ventId: 0,
@@ -603,9 +604,10 @@ function resetPerks(p) {
   p.pRevive = 0;     // extra lives on death (Tiragisú)
   // Vampire-Survivors auto-weapons (level 0 = not owned)
   p.wAura = 0; p.wOrbit = 0; p.wLightning = 0; p.wMissile = 0;
-  p.wWand = 0; p.wKnife = 0; p.wAxe = 0; p.wFire = 0; p.wHoly = 0; p.wCross = 0;
+  p.wWand = 0; p.wKnife = 0; p.wAxe = 0; p.wFire = 0; p.wHoly = 0; p.wCross = 0; p.wWhip = 0;
   p.auraAt = 0; p.lightningAt = 0; p.missileAt = 0; p.orbitAngle = 0;
-  p.wandAt = 0; p.knifeAt = 0; p.axeAt = 0; p.fireAt = 0; p.holyAt = 0; p.crossAt = 0;
+  p.wandAt = 0; p.knifeAt = 0; p.axeAt = 0; p.fireAt = 0; p.holyAt = 0; p.crossAt = 0; p.whipAt = 0;
+  p.iframeUntil = 0;
   p.auraR = 0; p.orbs = null;
 }
 
@@ -717,6 +719,8 @@ const PERKS = [
   { id:'holy2', name:'Kutsal Su+', desc:'+1 alan, daha geniş', icon:'💧', apply:p=>p.wHoly+=1 },
   { id:'cross1', name:'Bumerang Haç', desc:'Gidip dönen delici haç', icon:'✝️', apply:p=>p.wCross+=1 },
   { id:'cross2', name:'Bumerang Haç+', desc:'Daha sık haç', icon:'✝️', apply:p=>p.wCross+=1 },
+  { id:'whip1', name:'Kırbaç', desc:'Yanlarına yatay savurma', icon:'🪢', apply:p=>p.wWhip+=1 },
+  { id:'whip2', name:'Kırbaç+', desc:'Daha geniş & sık savurma', icon:'🪢', apply:p=>p.wWhip+=1 },
 ];
 
 function rollPerkChoices() {
@@ -742,8 +746,8 @@ function survDifficulty(room, now) {
     // Cap speed below the player's so they always stay kiteable.
     speed: C.SURV_MON_SPEED + Math.min(1.4, mins * 0.08),
     dmg:   C.SURV_MON_DMG + Math.floor(mins / 4),
-    interval: Math.max(C.SURV_SPAWN_MIN_MS, C.SURV_SPAWN_START_MS - mins * 85),
-    batch: 1 + Math.floor(mins / 3),
+    interval: Math.max(C.SURV_SPAWN_MIN_MS, C.SURV_SPAWN_START_MS - mins * 70),
+    batch: 1 + Math.floor(mins / 4),
   };
 }
 
@@ -799,7 +803,7 @@ function spawnSurvItem(room) {
   if (!alive.length) return;
   const anchor = alive[Math.floor(Math.random() * alive.length)];
   const MW = room.mapW || C.MAP_W, MH = room.mapH || C.MAP_H;
-  const types = ['chicken', 'magnet', 'bomb'];
+  const types = ['chicken', 'magnet', 'bomb', 'clock'];
   const type = types[Math.floor(Math.random() * types.length)];
   let x, y, tries = 16;
   do {
@@ -984,7 +988,7 @@ function startRound(room) {
   room.powerups = [];
   room.monsters = []; room.gems = []; room.survItems = []; room.crates = []; room.zones = [];
   room.lastItemSpawn = Date.now(); room.lastBossSpawn = Date.now(); room.lastCrateSpawn = Date.now();
-  room.nextItemId = 1; room.nextCrateId = 1;
+  room.nextItemId = 1; room.nextCrateId = 1; room.freezeUntil = 0;
   room.turrets = []; room.pets = [];
   room.roundEndsAt = Date.now() + C.ROUND_MS;
   room.remainingMs = C.ROUND_MS;
@@ -1467,6 +1471,16 @@ function survWeapons(room, p, now) {
     room.bullets.push({ id:room.nextBulletId++, owner:p.id, type:'cross', dmg:3+p.wCross*2, ownerCls:p.cls,
       x:p.x, y:p.y, vx:Math.cos(a)*10, vy:Math.sin(a)*10, angle:a, life:90, pierce:99, boomerang:1, rExtra:2*area });
   }
+  // Whip: instant horizontal slash to both sides of the player.
+  if (p.wWhip > 0 && now - (p.whipAt||0) >= Math.max(450, 1300 - p.wWhip*130)) {
+    p.whipAt = now;
+    const halfW = (130 + p.wWhip*30) * area, halfH = (34 + p.wWhip*6) * area;
+    const dmg = Math.ceil((3 + p.wWhip*2) * dmgMul);
+    for (const mo of ms) {
+      if (Math.abs(mo.y - p.y) < halfH && Math.abs(mo.x - p.x) < halfW) damageMonster(room, mo, dmg, p.id);
+    }
+    io.to(room.code).emit('whip', { x:Math.round(p.x), y:Math.round(p.y), w:Math.round(halfW), h:Math.round(halfH) });
+  }
 }
 
 function applyDamage(room, victim, dmg, killerId) {
@@ -1722,6 +1736,10 @@ function tick(room) {
             for (let mi = room.monsters.length-1; mi >= 0; mi--) {
               damageMonster(room, room.monsters[mi], 9999, p.id);
             }
+          } else if (it.type === 'clock') {
+            // freeze every zombie in place for a few seconds
+            room.freezeUntil = now + 3500;
+            io.to(room.code).emit('freeze', { ms: 3500 });
           }
           io.to(room.code).emit('survItem', { type: it.type });
           room.survItems.splice(i, 1);
@@ -1749,6 +1767,7 @@ function tick(room) {
 
   // Survival: monster AI — chase nearest alive player, deal contact damage.
   if (room.mode === 'survival') {
+    const frozen = now < (room.freezeUntil || 0);
     const alive = [...room.players.values()].filter(pl => pl.alive);
     for (let mi = room.monsters.length-1; mi >= 0; mi--) {
       const mo = room.monsters[mi];
@@ -1757,7 +1776,7 @@ function tick(room) {
         const d2 = (pl.x-mo.x)**2 + (pl.y-mo.y)**2;
         if (d2 < bestD) { bestD = d2; target = pl; }
       }
-      if (target) {
+      if (target && !frozen) {
         const dxm = target.x - mo.x, dym = target.y - mo.y;
         const dm = Math.hypot(dxm, dym) || 1;
         const sx = dxm/dm * mo.speed, sy = dym/dm * mo.speed;
@@ -1787,9 +1806,14 @@ function tick(room) {
         const hitR = mo.r + C.PLAYER_R;
         if (bestD < hitR*hitR && now >= mo.nextHitAt) {
           mo.nextHitAt = now + C.SURV_MON_CONTACT_CD;
-          applyDamage(room, target, mo.dmg, null);
-          // Thorns perk: zombies take damage when they touch you.
+          // Thorns perk still applies on every touch (zombie takes damage).
           if (target.pThorns) damageMonster(room, mo, target.pThorns, target.id);
+          // Invuln frames: the whole swarm can deal at most one hit per window,
+          // so being surrounded is survivable instead of instant death.
+          if (now >= (target.iframeUntil || 0)) {
+            target.iframeUntil = now + C.SURV_HURT_IFRAME_MS;
+            applyDamage(room, target, mo.dmg, null);
+          }
         }
       }
     }

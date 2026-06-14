@@ -1367,7 +1367,7 @@ socket.on('survItem', ({ type }) => {
     const notes = type === 'bomb' ? [48, 43, 36] : [72, 79, 84];
     notes.forEach((n, i) => AUD.playNote(n, t + i*0.06, 0.2, 'square', AUD.sfxGain, 0.3));
   }
-  const label = type === 'chicken' ? '🍗 CAN DOLDU' : (type === 'magnet' ? '🧲 XP TOPLANDI' : '💣 EKRAN TEMIZLENDI');
+  const label = type === 'chicken' ? '🍗 CAN DOLDU' : (type === 'magnet' ? '🧲 XP TOPLANDI' : (type === 'clock' ? '⏱️ ZAMAN DURDU' : '💣 EKRAN TEMIZLENDI'));
   state.killfeed.unshift({ note: label, t: Date.now() });
   if (state.killfeed.length > 6) state.killfeed.pop();
 });
@@ -1380,6 +1380,26 @@ socket.on('bossSpawn', () => {
   state.killfeed.unshift({ note: '👑 BOSS GELDI!', t: Date.now() });
   if (state.killfeed.length > 6) state.killfeed.pop();
 });
+
+// Survival: whip slash visual effect.
+const whips = [];
+socket.on('whip', (d) => { whips.push({ ...d, t: Date.now() }); if (whips.length > 20) whips.shift(); });
+function drawWhips() {
+  const now = Date.now();
+  for (let i = whips.length-1; i >= 0; i--) {
+    const wp = whips[i]; const age = now - wp.t;
+    if (age > 160) { whips.splice(i, 1); continue; }
+    const a = 1 - age/160;
+    const x = wp.x - camX, y = wp.y - camY;
+    gctx.fillStyle = `rgba(255,255,255,${a*0.5})`;
+    gctx.fillRect(x - wp.w, y - wp.h*0.5, wp.w*2, wp.h);
+    gctx.strokeStyle = `rgba(255,230,160,${a})`; gctx.lineWidth = 3;
+    gctx.beginPath(); gctx.moveTo(x - wp.w, y); gctx.lineTo(x + wp.w, y); gctx.stroke();
+  }
+}
+// Survival: time-freeze (Clock pickup) — tint screen while active.
+let freezeUntil = 0;
+socket.on('freeze', ({ ms }) => { freezeUntil = Date.now() + (ms || 3000); });
 
 // Survival: chain-lightning visual effect.
 const zaps = [];
@@ -1739,7 +1759,7 @@ function drawSurvItem(ctx, x, y, type) {
   ctx.save();
   ctx.fillStyle = 'rgba(0,0,0,0.35)';
   ctx.beginPath(); ctx.ellipse(x, y+12, 12, 4, 0, 0, Math.PI*2); ctx.fill();
-  const col = type === 'chicken' ? '#ffcf6a' : (type === 'magnet' ? '#ff5566' : '#ffae20');
+  const col = type === 'chicken' ? '#ffcf6a' : (type === 'magnet' ? '#ff5566' : (type === 'clock' ? '#6ad0ff' : '#ffae20'));
   ctx.globalAlpha = 0.25 + pulse*0.25; ctx.fillStyle = col;
   ctx.beginPath(); ctx.arc(x, cy, 16 + pulse*3, 0, Math.PI*2); ctx.fill();
   ctx.globalAlpha = 1;
@@ -1755,6 +1775,11 @@ function drawSurvItem(ctx, x, y, type) {
     ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x, cy-1, 5, Math.PI, 0); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(x-5, cy-1); ctx.lineTo(x-5, cy+5); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(x+5, cy-1); ctx.lineTo(x+5, cy+5); ctx.stroke();
+  } else if (type === 'clock') {
+    // clock face + hands
+    ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, cy, 6, 0, Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x, cy); ctx.lineTo(x, cy-4); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x, cy); ctx.lineTo(x+3, cy+1); ctx.stroke();
   } else {
     // bomb: circle + fuse
     ctx.beginPath(); ctx.arc(x, cy+1, 5, 0, Math.PI*2); ctx.fill();
@@ -1784,71 +1809,82 @@ function drawCrate(ctx, x, y, frac) {
   ctx.restore();
 }
 
-// Survival monster: a shambling zombie with head, lurching arms and a mouth.
+// Pre-rendered zombie body sprite cache (huge perf win with big swarms):
+// the static body/head/eyes/mouth/crown is baked once per tier+size, then the
+// render loop just drawImage()s it and adds cheap animated arms + hp bar.
+const monsterSprites = new Map(); // key `${tier}|${r}` -> canvas
+function getMonsterSprite(tier, r) {
+  const key = tier + '|' + r;
+  if (monsterSprites.has(key)) return monsterSprites.get(key);
+  const skin  = tier==='boss' ? '#9b59ff' : (tier==='elite' ? '#c63a48' : '#6e9a45');
+  const skinD = tier==='boss' ? '#5a2bb0' : (tier==='elite' ? '#7e1c26' : '#456a2a');
+  const skinL = tier==='boss' ? '#c9a6ff' : (tier==='elite' ? '#e3737d' : '#9bc46a');
+  const eyeC  = (tier==='elite'||tier==='boss') ? '#ffe24a' : '#ff3a2a';
+  const pad = 18;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = (r + pad) * 2;
+  const c = cv.getContext('2d');
+  c.translate(cv.width/2, cv.height/2);
+  // body
+  c.fillStyle = skinD; c.beginPath(); c.arc(0, 1, r, 0, Math.PI*2); c.fill();
+  c.fillStyle = skin;  c.beginPath(); c.arc(0, 0, r - 2, 0, Math.PI*2); c.fill();
+  c.fillStyle = skinD;
+  c.beginPath(); c.arc(-r*0.35, r*0.3, r*0.18, 0, Math.PI*2); c.fill();
+  c.beginPath(); c.arc( r*0.4, -r*0.1, r*0.14, 0, Math.PI*2); c.fill();
+  c.fillStyle = skinL;
+  c.beginPath(); c.arc(-r*0.25, -r*0.45, r*0.28, 0, Math.PI*2); c.fill();
+  const ew = Math.max(2.2, r*0.24), ey = -r*0.22;
+  c.fillStyle = 'rgba(0,0,0,0.5)';
+  c.fillRect(-r*0.46-1, ey-1, ew+2, ew+2); c.fillRect(r*0.46-ew-1, ey-1, ew+2, ew+2);
+  c.fillStyle = eyeC;
+  c.fillRect(-r*0.46, ey, ew, ew); c.fillRect(r*0.46-ew, ey, ew, ew);
+  c.strokeStyle = '#1a0a0a'; c.lineWidth = Math.max(1.4, r*0.12);
+  c.beginPath();
+  c.moveTo(-r*0.4, r*0.42); c.lineTo(-r*0.13, r*0.28); c.lineTo(0, r*0.46);
+  c.lineTo(r*0.13, r*0.28); c.lineTo(r*0.4, r*0.42); c.stroke();
+  if (tier==='boss') {
+    c.fillStyle = '#ffd24a';
+    c.beginPath();
+    c.moveTo(-r*0.6, -r*0.62); c.lineTo(-r*0.6, -r*1.02); c.lineTo(-r*0.2, -r*0.72);
+    c.lineTo(0, -r*1.08); c.lineTo(r*0.2, -r*0.72); c.lineTo(r*0.6, -r*1.02);
+    c.lineTo(r*0.6, -r*0.62); c.closePath(); c.fill();
+  }
+  monsterSprites.set(key, cv);
+  return cv;
+}
+
+// Survival monster: cached body sprite + cheap animated arms + hp bar.
 function drawMonster(ctx, x, y, m) {
   const t = Date.now() * 0.006;
   const id = m.id || 0;
-  const wob = Math.sin(t + id) * 1.6;           // bob up/down
-  const lurch = Math.sin(t*1.4 + id);            // arm swing
+  const wob = Math.sin(t + id) * 1.6;
+  const lurch = Math.sin(t*1.4 + id);
   const r = m.r || 12;
-  // colour sets per tier
-  const skin = m.boss ? '#9b59ff' : (m.elite ? '#c63a48' : '#6e9a45');
-  const skinD = m.boss ? '#5a2bb0' : (m.elite ? '#7e1c26' : '#456a2a');
-  const skinL = m.boss ? '#c9a6ff' : (m.elite ? '#e3737d' : '#9bc46a');
-  ctx.save();
-  ctx.translate(x, y + wob);
+  const tier = m.boss ? 'boss' : (m.elite ? 'elite' : 'normal');
+  const cy = y + wob;
   // shadow
   ctx.fillStyle = 'rgba(0,0,0,0.32)';
-  ctx.beginPath(); ctx.ellipse(0, r - wob, r*0.95, 3.5, 0, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(x, y + r, r*0.95, 3.5, 0, 0, Math.PI*2); ctx.fill();
   // boss aura
   if (m.boss) {
     const gp = 0.4 + 0.3*Math.sin(Date.now()/180);
     ctx.fillStyle = `rgba(180,80,255,${gp*0.4})`;
-    ctx.beginPath(); ctx.arc(0, 0, r+12, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x, cy, r+12, 0, Math.PI*2); ctx.fill();
   }
-  // outstretched arms (reaching toward prey)
+  // animated arms
+  const skinD = tier==='boss' ? '#5a2bb0' : (tier==='elite' ? '#7e1c26' : '#456a2a');
   ctx.strokeStyle = skinD; ctx.lineWidth = Math.max(3, r*0.32); ctx.lineCap = 'round';
-  ctx.beginPath(); ctx.moveTo(-r*0.5, 0); ctx.lineTo(-r*0.95, r*0.55 + lurch*2); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo( r*0.5, 0); ctx.lineTo( r*0.95, r*0.55 - lurch*2); ctx.stroke();
-  // body
-  ctx.fillStyle = skinD; ctx.beginPath(); ctx.arc(0, 1, r, 0, Math.PI*2); ctx.fill();
-  ctx.fillStyle = skin;  ctx.beginPath(); ctx.arc(0, 0, r - 2, 0, Math.PI*2); ctx.fill();
-  // a few rot blotches
-  ctx.fillStyle = skinD;
-  ctx.beginPath(); ctx.arc(-r*0.35, r*0.3, r*0.18, 0, Math.PI*2); ctx.fill();
-  ctx.beginPath(); ctx.arc( r*0.4, -r*0.1, r*0.14, 0, Math.PI*2); ctx.fill();
-  // top highlight
-  ctx.fillStyle = skinL;
-  ctx.beginPath(); ctx.arc(-r*0.25, -r*0.45, r*0.28, 0, Math.PI*2); ctx.fill();
-  // glowing eyes
-  const eyeC = (m.elite || m.boss) ? '#ffe24a' : '#ff3a2a';
-  const ew = Math.max(2.2, r*0.24), ey = -r*0.22;
-  ctx.fillStyle = 'rgba(0,0,0,0.5)';
-  ctx.fillRect(-r*0.46-1, ey-1, ew+2, ew+2); ctx.fillRect(r*0.46-ew-1, ey-1, ew+2, ew+2);
-  ctx.fillStyle = eyeC;
-  ctx.fillRect(-r*0.46, ey, ew, ew); ctx.fillRect(r*0.46-ew, ey, ew, ew);
-  // jagged mouth
-  ctx.strokeStyle = '#1a0a0a'; ctx.lineWidth = Math.max(1.4, r*0.12);
-  ctx.beginPath();
-  ctx.moveTo(-r*0.4, r*0.42);
-  ctx.lineTo(-r*0.13, r*0.28); ctx.lineTo(0, r*0.46);
-  ctx.lineTo(r*0.13, r*0.28); ctx.lineTo(r*0.4, r*0.42);
-  ctx.stroke();
-  // boss crown
-  if (m.boss) {
-    ctx.fillStyle = '#ffd24a';
-    ctx.beginPath();
-    ctx.moveTo(-r*0.6, -r*0.62); ctx.lineTo(-r*0.6, -r*1.02); ctx.lineTo(-r*0.2, -r*0.72);
-    ctx.lineTo(0, -r*1.08); ctx.lineTo(r*0.2, -r*0.72); ctx.lineTo(r*0.6, -r*1.02);
-    ctx.lineTo(r*0.6, -r*0.62); ctx.closePath(); ctx.fill();
-  }
+  ctx.beginPath(); ctx.moveTo(x-r*0.5, cy); ctx.lineTo(x-r*0.95, cy + r*0.55 + lurch*2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x+r*0.5, cy); ctx.lineTo(x+r*0.95, cy + r*0.55 - lurch*2); ctx.stroke();
+  // baked body
+  const spr = getMonsterSprite(tier, r);
+  ctx.drawImage(spr, x - spr.width/2, cy - spr.height/2);
   // hp bar if hurt
   if (m.hp < m.maxHp) {
     const bw = r*2, bf = Math.max(0, m.hp/m.maxHp) * bw;
-    ctx.fillStyle = '#000'; ctx.fillRect(-r, -r-8, bw, 3);
-    ctx.fillStyle = m.boss ? '#d29bff' : (m.elite ? '#ffcf3a' : '#9ce04a'); ctx.fillRect(-r, -r-8, bf, 3);
+    ctx.fillStyle = '#000'; ctx.fillRect(x-r, cy-r-8, bw, 3);
+    ctx.fillStyle = m.boss ? '#d29bff' : (m.elite ? '#ffcf3a' : '#9ce04a'); ctx.fillRect(x-r, cy-r-8, bf, 3);
   }
-  ctx.restore();
 }
 
 function drawRocketPickup(ctx, x, y) {
@@ -2325,6 +2361,8 @@ function render() {
   }
   drawExplosions();
   drawZaps();
+  drawWhips();
+  if (Date.now() < freezeUntil) { gctx.fillStyle = 'rgba(120,200,255,0.13)'; gctx.fillRect(0, 0, W, H); }
   drawKnifeFx();
 
   // pets (heal totems)
