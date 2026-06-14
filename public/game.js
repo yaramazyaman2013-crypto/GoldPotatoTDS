@@ -1381,6 +1381,30 @@ socket.on('bossSpawn', () => {
   if (state.killfeed.length > 6) state.killfeed.pop();
 });
 
+// screen-shake state (boss hits)
+let shakeUntil = 0, shakeMag = 0;
+// Acid zombie spit — gross hiss/spit sound.
+socket.on('spit', () => {
+  if (!AUD.ctx || AUD.muted) return;
+  const t = AUD.ctx.currentTime;
+  // noisy descending "ptooey"
+  AUD.playNote(70, t, 0.06, 'sawtooth', AUD.sfxGain, 0.18);
+  AUD.playNote(52, t + 0.05, 0.12, 'sawtooth', AUD.sfxGain, 0.20);
+  AUD.playNote(40, t + 0.13, 0.10, 'square', AUD.sfxGain, 0.14);
+});
+// Boss punch / grab-throw — heavy thud + brief screen shake.
+function bossHitFx(big) {
+  if (AUD.ctx && !AUD.muted) {
+    const t = AUD.ctx.currentTime;
+    AUD.playNote(36, t, 0.18, 'square', AUD.sfxGain, 0.35);
+    AUD.playNote(28, t + 0.04, 0.22, 'sawtooth', AUD.sfxGain, 0.3);
+  }
+  shakeUntil = Date.now() + (big ? 320 : 160);
+  shakeMag = big ? 9 : 5;
+}
+socket.on('bossPunch', () => bossHitFx(false));
+socket.on('bossThrow', () => bossHitFx(true));
+
 // Survival: whip slash visual effect.
 const whips = [];
 socket.on('whip', (d) => { whips.push({ ...d, t: Date.now() }); if (whips.length > 20) whips.shift(); });
@@ -1816,10 +1840,10 @@ const monsterSprites = new Map(); // key `${tier}|${r}` -> canvas
 function getMonsterSprite(tier, r) {
   const key = tier + '|' + r;
   if (monsterSprites.has(key)) return monsterSprites.get(key);
-  const skin  = tier==='boss' ? '#9b59ff' : (tier==='elite' ? '#c63a48' : '#6e9a45');
-  const skinD = tier==='boss' ? '#5a2bb0' : (tier==='elite' ? '#7e1c26' : '#456a2a');
-  const skinL = tier==='boss' ? '#c9a6ff' : (tier==='elite' ? '#e3737d' : '#9bc46a');
-  const eyeC  = (tier==='elite'||tier==='boss') ? '#ffe24a' : '#ff3a2a';
+  const skin  = tier==='boss' ? '#9b59ff' : (tier==='elite' ? '#c63a48' : (tier==='acid' ? '#a6c33a' : '#6e9a45'));
+  const skinD = tier==='boss' ? '#5a2bb0' : (tier==='elite' ? '#7e1c26' : (tier==='acid' ? '#5f7a16' : '#456a2a'));
+  const skinL = tier==='boss' ? '#c9a6ff' : (tier==='elite' ? '#e3737d' : (tier==='acid' ? '#d9f06a' : '#9bc46a'));
+  const eyeC  = (tier==='elite'||tier==='boss') ? '#ffe24a' : (tier==='acid' ? '#caff3a' : '#ff3a2a');
   const pad = 18;
   const cv = document.createElement('canvas');
   cv.width = cv.height = (r + pad) * 2;
@@ -1860,7 +1884,7 @@ function drawMonster(ctx, x, y, m) {
   const wob = Math.sin(t + id) * 1.6;
   const lurch = Math.sin(t*1.4 + id);
   const r = m.r || 12;
-  const tier = m.boss ? 'boss' : (m.elite ? 'elite' : 'normal');
+  const tier = m.boss ? 'boss' : (m.elite ? 'elite' : (m.acid ? 'acid' : 'normal'));
   const cy = y + wob;
   // shadow
   ctx.fillStyle = 'rgba(0,0,0,0.32)';
@@ -1871,11 +1895,24 @@ function drawMonster(ctx, x, y, m) {
     ctx.fillStyle = `rgba(180,80,255,${gp*0.4})`;
     ctx.beginPath(); ctx.arc(x, cy, r+12, 0, Math.PI*2); ctx.fill();
   }
-  // animated arms
-  const skinD = tier==='boss' ? '#5a2bb0' : (tier==='elite' ? '#7e1c26' : '#456a2a');
-  ctx.strokeStyle = skinD; ctx.lineWidth = Math.max(3, r*0.32); ctx.lineCap = 'round';
-  ctx.beginPath(); ctx.moveTo(x-r*0.5, cy); ctx.lineTo(x-r*0.95, cy + r*0.55 + lurch*2); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(x+r*0.5, cy); ctx.lineTo(x+r*0.95, cy + r*0.55 - lurch*2); ctx.stroke();
+  // animated arms (boss has two longer reaching arms with fists)
+  const skinD = tier==='boss' ? '#5a2bb0' : (tier==='elite' ? '#7e1c26' : (tier==='acid' ? '#5f7a16' : '#456a2a'));
+  if (m.boss) {
+    const reach = r*1.5, drop = r*0.7;
+    ctx.strokeStyle = skinD; ctx.lineWidth = Math.max(4, r*0.34); ctx.lineCap = 'round';
+    const lx = x - reach, lyy = cy + drop + lurch*5;
+    const rx = x + reach, ryy = cy + drop - lurch*5;
+    ctx.beginPath(); ctx.moveTo(x-r*0.5, cy); ctx.lineTo(x-r*0.95, cy); ctx.lineTo(lx, lyy); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x+r*0.5, cy); ctx.lineTo(x+r*0.95, cy); ctx.lineTo(rx, ryy); ctx.stroke();
+    // fists
+    ctx.fillStyle = '#7b46c8';
+    ctx.beginPath(); ctx.arc(lx, lyy, r*0.34, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(rx, ryy, r*0.34, 0, Math.PI*2); ctx.fill();
+  } else {
+    ctx.strokeStyle = skinD; ctx.lineWidth = Math.max(3, r*0.32); ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(x-r*0.5, cy); ctx.lineTo(x-r*0.95, cy + r*0.55 + lurch*2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x+r*0.5, cy); ctx.lineTo(x+r*0.95, cy + r*0.55 - lurch*2); ctx.stroke();
+  }
   // baked body
   const spr = getMonsterSprite(tier, r);
   ctx.drawImage(spr, x - spr.width/2, cy - spr.height/2);
@@ -2196,6 +2233,11 @@ function render() {
   camY += (targetCamY - camY) * CAM_LERP;
   if (state.mapW < W) camX = (state.mapW - W)/2;
   if (state.mapH < H) camY = (state.mapH - H)/2;
+  // Screen shake (boss punch / throw)
+  if (Date.now() < shakeUntil) {
+    const m = shakeMag * (shakeUntil - Date.now()) / 320;
+    camX += (Math.random()*2-1) * m; camY += (Math.random()*2-1) * m;
+  }
 
   gctx.imageSmoothingEnabled = false;
   // Always clear first so off-map areas don't show leftover pixels (cursor trails etc.)
@@ -2354,6 +2396,11 @@ function render() {
       gctx.save(); gctx.translate(x, y); gctx.rotate(Date.now()/120);
       gctx.fillStyle = '#ffd24a'; gctx.fillRect(-2, -8, 4, 16); gctx.fillRect(-8, -2, 16, 4);
       gctx.restore();
+    } else if (b.type === 'acid') {
+      const ap = 0.5 + 0.5*Math.sin(Date.now()/90);
+      gctx.fillStyle = `rgba(150,220,40,${0.4+ap*0.25})`; gctx.beginPath(); gctx.arc(x, y, 7+ap*1.5, 0, Math.PI*2); gctx.fill();
+      gctx.fillStyle = '#cfff5a'; gctx.beginPath(); gctx.arc(x, y, 3.5, 0, Math.PI*2); gctx.fill();
+      gctx.fillStyle = '#5f7a16'; gctx.fillRect(x-1, y-1, 2, 2);
     } else {
       gctx.fillStyle='#000'; gctx.fillRect(x-3,y-3,6,6);
       gctx.fillStyle='#ffd24a'; gctx.fillRect(x-2,y-2,4,4);
