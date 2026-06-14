@@ -116,6 +116,11 @@ const C = {
   SURV_MON_DMG:         1,
   SURV_MON_CONTACT_CD:  650,    // ms between contact hits from one monster
   SURV_HURT_IFRAME_MS:  320,    // player invuln window after any contact hit
+  SURV_ACID_RANGE:      330,    // acid zombie spit range
+  SURV_ACID_CD:         2100,   // ms between acid spits
+  SURV_ACID_SPEED:      6.5,
+  BOSS_PUNCH_RANGE:     140,    // boss reach for punch / grab-throw
+  BOSS_PUNCH_CD:        1600,
   SURV_MON_R:           12,
   SURV_MON_XP:          1,
   SURV_GEM_MAGNET_R:    190,    // auto-collect radius
@@ -510,7 +515,7 @@ function addPlayer(room, id, name, color, cls) {
     wAura: 0, wOrbit: 0, wLightning: 0, wMissile: 0,
     wWand: 0, wKnife: 0, wAxe: 0, wFire: 0, wHoly: 0, wCross: 0, wWhip: 0,
     auraAt: 0, lightningAt: 0, missileAt: 0, orbitAngle: 0, auraR: 0, orbs: null,
-    wandAt: 0, knifeAt: 0, axeAt: 0, fireAt: 0, holyAt: 0, crossAt: 0, whipAt: 0, iframeUntil: 0,
+    wandAt: 0, knifeAt: 0, axeAt: 0, fireAt: 0, holyAt: 0, crossAt: 0, whipAt: 0, iframeUntil: 0, stunUntil: 0,
     // Imposter mode
     role: 'crew', tasks: [], killReadyAt: 0, emergencyUsed: 0,
     vented: false, ventGroup: null, ventId: 0,
@@ -779,17 +784,19 @@ function spawnMonster(room, diff) {
   }
   // Occasional tougher "elite" (bigger, more hp, more xp)
   const elite = diff.mins > 1 && Math.random() < 0.06;
+  // Acid zombies (ranged spitters) appear once things get going
+  const acid = !elite && diff.mins > 0.5 && Math.random() < 0.12;
   const curse = diff.curse || 0;
-  const spd = (elite ? diff.speed * 0.8 : diff.speed) * (1 + curse * 0.08);
+  const spd = (elite ? diff.speed * 0.8 : (acid ? diff.speed * 0.82 : diff.speed)) * (1 + curse * 0.08);
   room.monsters.push({
     id: room.nextMonsterId++, x, y,
-    hp: elite ? diff.hp * 4 : diff.hp,
-    maxHp: elite ? diff.hp * 4 : diff.hp,
+    hp: elite ? diff.hp * 4 : (acid ? Math.ceil(diff.hp * 1.3) : diff.hp),
+    maxHp: elite ? diff.hp * 4 : (acid ? Math.ceil(diff.hp * 1.3) : diff.hp),
     speed: spd,
     dmg: elite ? diff.dmg * 2 : diff.dmg,
     r: elite ? C.SURV_MON_R + 7 : C.SURV_MON_R,
-    xp: (elite ? 6 : C.SURV_MON_XP) * (1 + curse),
-    elite, nextHitAt: 0,
+    xp: (elite ? 6 : (acid ? 3 : C.SURV_MON_XP)) * (1 + curse),
+    elite, acid, nextHitAt: 0, spitAt: 0,
   });
 }
 
@@ -1619,6 +1626,8 @@ function tick(room) {
     let dx = 0, dy = 0;
     if (p.keys.w) dy -= 1; if (p.keys.s) dy += 1;
     if (p.keys.a) dx -= 1; if (p.keys.d) dx += 1;
+    // Stunned (just got thrown by a boss) — can't move for a moment.
+    if (now < (p.stunUntil || 0)) { dx = 0; dy = 0; }
     if (dx || dy) {
       const len = Math.hypot(dx, dy);
       tryMove(p, dx/len*C.PLAYER_SPEED*speedMul, dy/len*C.PLAYER_SPEED*speedMul, playerR);
@@ -1815,6 +1824,35 @@ function tick(room) {
             applyDamage(room, target, mo.dmg, null);
           }
         }
+        // Acid zombie: spit a glob of acid at the player from range.
+        if (mo.acid && bestD < C.SURV_ACID_RANGE*C.SURV_ACID_RANGE && now >= (mo.spitAt||0)) {
+          mo.spitAt = now + C.SURV_ACID_CD;
+          const ang = Math.atan2(target.y-mo.y, target.x-mo.x);
+          room.bullets.push({
+            id: room.nextBulletId++, owner: null, enemy: true, type: 'acid', dmg: mo.dmg,
+            x: mo.x, y: mo.y, vx: Math.cos(ang)*C.SURV_ACID_SPEED, vy: Math.sin(ang)*C.SURV_ACID_SPEED,
+            angle: ang, life: 95,
+          });
+          io.to(room.code).emit('spit', { x: Math.round(mo.x), y: Math.round(mo.y) });
+        }
+        // Boss: at close range, punch (knockback) or grab-and-throw the player.
+        if (mo.boss && bestD < C.BOSS_PUNCH_RANGE*C.BOSS_PUNCH_RANGE && now >= (mo.punchAt||0)) {
+          mo.punchAt = now + C.BOSS_PUNCH_CD;
+          if (now >= (target.iframeUntil || 0)) {
+            target.iframeUntil = now + C.SURV_HURT_IFRAME_MS;
+            const ang = Math.atan2(target.y-mo.y, target.x-mo.x);
+            const isThrow = ((mo.punchCount = (mo.punchCount||0)+1) % 2) === 0;
+            applyDamage(room, target, mo.dmg * (isThrow ? 2 : 1), null);
+            const MW = room.mapW || C.MAP_W, MH = room.mapH || C.MAP_H;
+            let dist = isThrow ? 210 : 70;
+            let nx = target.x + Math.cos(ang)*dist, ny = target.y + Math.sin(ang)*dist;
+            if (hitsWallList(room.walls, nx, ny, C.PLAYER_R)) { nx = target.x + Math.cos(ang)*60; ny = target.y + Math.sin(ang)*60; }
+            target.x = Math.max(20, Math.min(MW-20, nx));
+            target.y = Math.max(20, Math.min(MH-20, ny));
+            if (isThrow) target.stunUntil = now + 550;
+            io.to(room.code).emit(isThrow ? 'bossThrow' : 'bossPunch', { id: target.id, x: Math.round(target.x), y: Math.round(target.y) });
+          }
+        }
       }
     }
     // Defensive cap on gems
@@ -1969,6 +2007,23 @@ function tick(room) {
         if (isRocket) detonated = true;
         else { room.bullets.splice(i,1); continue; }
       }
+    }
+
+    // Enemy projectiles (acid spit) damage players, not monsters.
+    if (!detonated && b.enemy) {
+      let hit = false;
+      for (const p of room.players.values()) {
+        if (!p.alive) continue;
+        if ((p.x-b.x)**2 + (p.y-b.y)**2 < (C.PLAYER_R + r)**2) {
+          if (now >= (p.iframeUntil || 0)) {
+            p.iframeUntil = now + C.SURV_HURT_IFRAME_MS;
+            applyDamage(room, p, b.dmg || 1, null);
+          }
+          room.bullets.splice(i, 1); hit = true; break;
+        }
+      }
+      if (hit) continue;
+      continue; // enemy bullets ignore monsters/turrets; keep flying
     }
 
     if (!detonated) {
@@ -2137,7 +2192,7 @@ function tick(room) {
       rocketPickups: room.rocketPickups.map(r=>({x:r.x, y:r.y})),
       sodas:   room.sodas.map(s=>({x:s.x, y:s.y})),
       powerups: room.powerups.map(pu=>({x:pu.x, y:pu.y, type:pu.type})),
-      monsters: room.monsters.map(m=>({id:m.id, x:m.x, y:m.y, hp:m.hp, maxHp:m.maxHp, r:m.r, elite:m.elite, boss:m.boss})),
+      monsters: room.monsters.map(m=>({id:m.id, x:m.x, y:m.y, hp:m.hp, maxHp:m.maxHp, r:m.r, elite:m.elite, boss:m.boss, acid:m.acid})),
       gems: room.gems.map(g=>({x:g.x, y:g.y, val:g.val})),
       survItems: room.survItems.map(it=>({x:it.x, y:it.y, type:it.type})),
       crates: room.crates.map(cr=>({x:cr.x, y:cr.y, hp:cr.hp, maxHp:cr.maxHp})),
