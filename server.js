@@ -109,17 +109,17 @@ const C = {
   SURV_MAP_W:           3600,   // survival uses a MUCH bigger arena
   SURV_MAP_H:           2700,
   SURV_SPAWN_START_MS:  1400,   // initial gap between spawn batches
-  SURV_SPAWN_MIN_MS:    500,    // fastest spawn gap (fewer zombies overall)
-  SURV_MAX_MONSTERS:    80,     // hard cap on living zombies
+  SURV_SPAWN_MIN_MS:    420,    // fastest spawn gap
+  SURV_MAX_MONSTERS:    110,    // hard cap on living zombies
   SURV_MON_SPEED:       1.6,
   SURV_MON_HP:          3,
   SURV_MON_DMG:         1,
   SURV_MON_CONTACT_CD:  650,    // ms between contact hits from one monster
   SURV_MON_R:           12,
   SURV_MON_XP:          1,
-  SURV_GEM_MAGNET_R:    230,    // wide auto-collect so XP is easy to pick up
-  SURV_LEVEL_BASE_XP:   4,      // xp needed for level 2
-  SURV_LEVEL_GROWTH:    1.22,   // gentler xp curve (faster leveling)
+  SURV_GEM_MAGNET_R:    190,    // auto-collect radius
+  SURV_LEVEL_BASE_XP:   5,      // xp needed for level 2
+  SURV_LEVEL_GROWTH:    1.25,   // xp curve (leveling not trivial, not brutal)
   SURV_RESPAWN_MS:      60 * 1000, // dead players come back after 60s
   SURV_ITEM_EVERY:      22 * 1000, // special pickup spawn interval
   SURV_BOSS_EVERY:      70 * 1000, // boss zombie interval
@@ -737,13 +737,13 @@ function survDifficulty(room, now) {
   const mins = Math.max(0, (now - room.survStartAt) / 60000);
   return {
     mins,
-    // Gentler scaling so zombies stay beatable in the late game.
-    hp:    C.SURV_MON_HP + Math.floor(mins * 1.2),
+    // Balanced scaling — zombies stay a threat but remain beatable.
+    hp:    C.SURV_MON_HP + Math.floor(mins * 1.4),
     // Cap speed below the player's so they always stay kiteable.
-    speed: C.SURV_MON_SPEED + Math.min(1.2, mins * 0.07),
-    dmg:   C.SURV_MON_DMG + Math.floor(mins / 5),
-    interval: Math.max(C.SURV_SPAWN_MIN_MS, C.SURV_SPAWN_START_MS - mins * 80),
-    batch: 1 + Math.floor(mins / 4),
+    speed: C.SURV_MON_SPEED + Math.min(1.4, mins * 0.08),
+    dmg:   C.SURV_MON_DMG + Math.floor(mins / 4),
+    interval: Math.max(C.SURV_SPAWN_MIN_MS, C.SURV_SPAWN_START_MS - mins * 85),
+    batch: 1 + Math.floor(mins / 3),
   };
 }
 
